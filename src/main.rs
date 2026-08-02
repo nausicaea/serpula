@@ -1,3 +1,5 @@
+use app::Cli;
+use clap::{Parser, Subcommand};
 use directories::{BaseDirs, ProjectDirs};
 use std::collections::HashMap;
 use std::env;
@@ -371,6 +373,7 @@ mod lockfile {
         let file = OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(true)
             .mode(0o600)
             .open(path)?;
         file.try_lock()
@@ -587,33 +590,34 @@ mod app {
     use crate::restic::run_restic;
     use crate::secrets::{build_restic_env, ensure_secrets_scaffold, get_ntfy_topic};
 
-    pub enum CliCommand {
-        Backup,
-        Check,
-        Forget,
-        Prune,
-        Install,
-        Help,
+    /// Scheduled restic backups for macOS + launchd.
+    ///
+    /// Secrets (RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID,
+    /// AWS_SECRET_ACCESS_KEY, NTFY_TOPIC) live in a 0600 file under the app's
+    /// local data directory (see `install` output for the exact path).
+    #[derive(Parser)]
+    #[command(name = "restic-backup", version, about, long_about = None)]
+    pub struct Cli {
+        #[command(subcommand)]
+        pub command: CliCommand,
     }
 
-    pub fn parse_command(args: &[String]) -> std::result::Result<CliCommand, i32> {
-        match args.get(1).map(String::as_str) {
-            Some("backup") => Ok(CliCommand::Backup),
-            Some("check") => Ok(CliCommand::Check),
-            Some("forget") => Ok(CliCommand::Forget),
-            Some("prune") => Ok(CliCommand::Prune),
-            Some("install") => Ok(CliCommand::Install),
-            Some("help") | Some("-h") | Some("--help") => Ok(CliCommand::Help),
-            Some(other) => {
-                eprintln!("unknown subcommand '{other}'\n");
-                print_usage();
-                Err(2)
-            }
-            None => {
-                print_usage();
-                Err(2)
-            }
-        }
+    #[derive(Subcommand)]
+    pub enum CliCommand {
+        /// Run `restic backup` against $HOME (or $BACKUP_PATH), tagged with the
+        /// hostname, excluding caches. Intended to run hourly.
+        Backup,
+        /// Run `restic check --read-data-subset` over a percentage of the
+        /// repository ($RESTIC_CHECK_PERCENT, default 10). Intended weekly.
+        Check,
+        /// Apply the retention policy (keep-hourly/daily/weekly/monthly/yearly,
+        /// overridable via env) to snapshots tagged with the hostname. Intended daily.
+        Forget,
+        /// Run `restic prune` to reclaim space from forgotten snapshots.
+        /// Intended daily, after forget.
+        Prune,
+        /// Generate and load launchd agents for the four subcommands above.
+        Install,
     }
 
     pub fn execute(cmd: CliCommand) -> i32 {
@@ -629,10 +633,6 @@ mod app {
                     1
                 }
             },
-            CliCommand::Help => {
-                print_usage();
-                0
-            }
         }
     }
 
@@ -825,43 +825,6 @@ mod app {
         format!("{}%", raw.trim().trim_end_matches('%'))
     }
 
-    pub fn print_usage() {
-        eprintln!(
-            r#"restic-backup - scheduled restic backups for macOS + launchd
-
-USAGE:
-    restic-backup <SUBCOMMAND>
-
-SUBCOMMANDS:
-    backup    Run `restic backup` against $HOME (or $BACKUP_PATH), tagged with
-              the hostname, excluding caches. Intended to run hourly.
-    check     Run `restic check --read-data-subset` over a percentage of the
-              repository ($RESTIC_CHECK_PERCENT, default 10). Intended weekly.
-    forget    Apply the retention policy (keep-hourly/daily/weekly/monthly/
-              yearly, overridable via env) to snapshots tagged with the
-              hostname. Intended daily.
-    prune     Run `restic prune` to reclaim space from forgotten snapshots.
-              Intended daily, after forget.
-    install   Generate and load launchd agents for the four subcommands above.
-
-ENVIRONMENT:
-    BACKUP_PATH             Path to back up (default: $HOME)
-    RESTIC_BACKUP_HOSTNAME  Override the detected hostname / tag
-    RESTIC_KEEP_HOURLY      default 24
-    RESTIC_KEEP_DAILY       default 14
-    RESTIC_KEEP_WEEKLY      default 4
-    RESTIC_KEEP_MONTHLY     default 12
-    RESTIC_KEEP_YEARLY      default 10
-    RESTIC_CHECK_PERCENT    default 10
-    NTFY_SERVER             default https://ntfy.sh
-    NTFY_TOPIC              secret; generated and stored if unset
-
-Secrets (RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID,
-AWS_SECRET_ACCESS_KEY, NTFY_TOPIC) live in a 0600 file under the app's local
-data directory (see `install` output for the exact path)."#
-        );
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -876,10 +839,7 @@ data directory (see `install` output for the exact path)."#
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let code = match app::parse_command(&args) {
-        Ok(cmd) => app::execute(cmd),
-        Err(code) => code,
-    };
+    let cli = Cli::parse();
+    let code = app::execute(cli.command);
     std::process::exit(code);
 }
