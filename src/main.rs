@@ -39,6 +39,36 @@ impl From<&str> for AppError {
     }
 }
 
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn display_shows_inner_message() {
+        let e = AppError("something went wrong".to_string());
+        assert_eq!(format!("{e}"), "something went wrong");
+    }
+
+    #[test]
+    fn from_string_roundtrip() {
+        let e: AppError = "owned".to_string().into();
+        assert_eq!(format!("{e}"), "owned");
+    }
+
+    #[test]
+    fn from_str_roundtrip() {
+        let e: AppError = "borrowed".into();
+        assert_eq!(format!("{e}"), "borrowed");
+    }
+
+    #[test]
+    fn from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file missing");
+        let e: AppError = io_err.into();
+        assert!(format!("{e}").contains("file missing"));
+    }
+}
+
 mod logger {
     use super::*;
 
@@ -334,6 +364,42 @@ mod secrets {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        /// Create a unique temp directory for a test and return its path.
+        /// The caller is responsible for cleanup (or just let the OS reap it).
+        fn make_tmp() -> PathBuf {
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("serpula-test-secrets-{}-{id}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        /// Build a minimal Config that points into a temp directory so tests
+        /// never touch the real home / XDG dirs.
+        fn make_config(root: &Path) -> Config {
+            Config {
+                home_dir: root.to_path_buf(),
+                username: "testuser".to_string(),
+                secrets_path: root.join("secrets").join("env"),
+                state_dir: root.join("state"),
+                log_dir: root.join("logs"),
+                cache_dir: root.join("cache"),
+                backup_source: root.join("backup"),
+                hostname: "testhost".to_string(),
+                ntfy_server: "https://ntfy.sh".to_string(),
+                keep_hourly: "24".to_string(),
+                keep_daily: "14".to_string(),
+                keep_weekly: "4".to_string(),
+                keep_monthly: "12".to_string(),
+                keep_yearly: "10".to_string(),
+                check_percent: "10".to_string(),
+            }
+        }
 
         #[test]
         fn parse_ignores_comments_and_whitespace() {
@@ -350,6 +416,12 @@ mod secrets {
         }
 
         #[test]
+        fn parse_line_without_equals_is_ignored() {
+            let m = parse_secrets_content("NOEQUALSSIGN\n");
+            assert!(m.is_empty());
+        }
+
+        #[test]
         fn serialize_sorts_keys() {
             let mut m = HashMap::new();
             m.insert("B".to_string(), "2".to_string());
@@ -359,6 +431,158 @@ mod secrets {
             let idx_a = s.find("A=1").unwrap();
             let idx_b = s.find("B=2").unwrap();
             assert!(idx_a < idx_b);
+        }
+
+        #[test]
+        fn serialize_includes_header_comment() {
+            let m = HashMap::new();
+            let s = serialize_secrets(&m);
+            assert!(s.starts_with("# restic-backup secrets"));
+        }
+
+        #[test]
+        fn load_secrets_returns_empty_for_missing_file() {
+            let tmp = make_tmp();
+            let path = tmp.join("nonexistent");
+            let m = load_secrets(&path).unwrap();
+            assert!(m.is_empty());
+        }
+
+        #[test]
+        fn save_and_load_secrets_roundtrip() {
+            let tmp = make_tmp();
+            let path = tmp.join("secrets").join("env");
+            let mut m = HashMap::new();
+            m.insert("FOO".to_string(), "bar".to_string());
+            save_secrets(&path, &m).unwrap();
+            let loaded = load_secrets(&path).unwrap();
+            assert_eq!(loaded.get("FOO"), Some(&"bar".to_string()));
+        }
+
+        #[test]
+        fn ensure_secrets_scaffold_creates_file_when_missing() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            ensure_secrets_scaffold(&config).unwrap();
+            assert!(config.secrets_path.exists());
+            let content = fs::read_to_string(&config.secrets_path).unwrap();
+            assert!(content.contains("RESTIC_REPOSITORY"));
+            assert!(content.contains("RESTIC_PASSWORD"));
+        }
+
+        #[test]
+        fn ensure_secrets_scaffold_is_noop_when_file_exists() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            // Pre-create the file with custom content.
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(&config.secrets_path, "CUSTOM=value\n").unwrap();
+            ensure_secrets_scaffold(&config).unwrap();
+            // File must not have been overwritten.
+            let content = fs::read_to_string(&config.secrets_path).unwrap();
+            assert_eq!(content, "CUSTOM=value\n");
+        }
+
+        #[test]
+        fn get_ntfy_topic_reads_from_secrets_file() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(&config.secrets_path, "NTFY_TOPIC=my-test-topic\n").unwrap();
+            // Make sure the env var is not set so we fall through to the file.
+            unsafe { env::remove_var("NTFY_TOPIC") };
+            let topic = get_ntfy_topic(&config).unwrap();
+            assert_eq!(topic, "my-test-topic");
+        }
+
+        #[test]
+        fn get_ntfy_topic_generates_and_persists_when_absent() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            // Write a secrets file with no NTFY_TOPIC entry.
+            fs::write(&config.secrets_path, "").unwrap();
+            unsafe { env::remove_var("NTFY_TOPIC") };
+            let topic = get_ntfy_topic(&config).unwrap();
+            assert!(topic.starts_with("restic-backup-"));
+            // A second call must return the same persisted topic.
+            let topic2 = get_ntfy_topic(&config).unwrap();
+            assert_eq!(topic, topic2);
+        }
+
+        #[test]
+        fn build_restic_env_errors_when_required_keys_missing() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            // Secrets file exists but is empty → required keys absent.
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(&config.secrets_path, "").unwrap();
+            let err = build_restic_env(&config).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("missing RESTIC_REPOSITORY")
+                    || msg.contains("missing RESTIC_PASSWORD")
+            );
+        }
+
+        #[test]
+        fn build_restic_env_happy_path() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(
+                &config.secrets_path,
+                "RESTIC_REPOSITORY=s3:bucket\nRESTIC_PASSWORD=secret\nAWS_ACCESS_KEY_ID=AKID\n",
+            )
+            .unwrap();
+            let env_vars = build_restic_env(&config).unwrap();
+            assert_eq!(
+                env_vars.get("RESTIC_REPOSITORY").map(String::as_str),
+                Some("s3:bucket")
+            );
+            assert_eq!(
+                env_vars.get("RESTIC_PASSWORD").map(String::as_str),
+                Some("secret")
+            );
+            assert_eq!(
+                env_vars.get("AWS_ACCESS_KEY_ID").map(String::as_str),
+                Some("AKID")
+            );
+            // RESTIC_CACHE_DIR must always be injected.
+            assert!(env_vars.contains_key("RESTIC_CACHE_DIR"));
+            assert!(env_vars.contains_key("PATH"));
+        }
+
+        #[test]
+        fn build_restic_env_skips_blank_optional_keys() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(
+                &config.secrets_path,
+                "RESTIC_REPOSITORY=s3:bucket\nRESTIC_PASSWORD=secret\nAWS_ACCESS_KEY_ID=\n",
+            )
+            .unwrap();
+            let env_vars = build_restic_env(&config).unwrap();
+            // Blank optional key must not appear.
+            assert!(!env_vars.contains_key("AWS_ACCESS_KEY_ID"));
+        }
+
+        #[test]
+        fn build_restic_env_injects_cache_dir_from_config() {
+            let tmp = make_tmp();
+            let config = make_config(&tmp);
+            fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
+            fs::write(
+                &config.secrets_path,
+                "RESTIC_REPOSITORY=s3:bucket\nRESTIC_PASSWORD=secret\n",
+            )
+            .unwrap();
+            let env_vars = build_restic_env(&config).unwrap();
+            assert_eq!(
+                env_vars.get("RESTIC_CACHE_DIR").map(String::as_str),
+                Some(config.cache_dir.to_str().unwrap())
+            );
         }
     }
 }
@@ -560,10 +784,36 @@ mod launchd {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::path::PathBuf;
+
+        fn dummy_config() -> Config {
+            Config {
+                home_dir: PathBuf::from("/home/test"),
+                username: "alice".to_string(),
+                secrets_path: PathBuf::from("/home/test/.secrets/env"),
+                state_dir: PathBuf::from("/home/test/.state"),
+                log_dir: PathBuf::from("/home/test/.logs"),
+                cache_dir: PathBuf::from("/home/test/.cache"),
+                backup_source: PathBuf::from("/home/test"),
+                hostname: "myhost".to_string(),
+                ntfy_server: "https://ntfy.sh".to_string(),
+                keep_hourly: "24".to_string(),
+                keep_daily: "14".to_string(),
+                keep_weekly: "4".to_string(),
+                keep_monthly: "12".to_string(),
+                keep_yearly: "10".to_string(),
+                check_percent: "10".to_string(),
+            }
+        }
 
         #[test]
         fn escapes_xml_chars() {
             assert_eq!(xml_escape(r#"<>&"'"#), "&lt;&gt;&amp;&quot;&apos;");
+        }
+
+        #[test]
+        fn xml_escape_plain_string_unchanged() {
+            assert_eq!(xml_escape("hello world"), "hello world");
         }
 
         #[test]
@@ -572,10 +822,65 @@ mod launchd {
         }
 
         #[test]
+        fn sanitize_alnum_unchanged() {
+            assert_eq!(sanitize("alice123"), "alice123");
+        }
+
+        #[test]
+        fn plist_label_format() {
+            let cfg = dummy_config();
+            let label = plist_label(&cfg, "backup");
+            assert_eq!(label, "com.restic-backup.alice.backup");
+        }
+
+        #[test]
+        fn plist_label_sanitizes_username() {
+            let mut cfg = dummy_config();
+            cfg.username = "john.doe".to_string();
+            let label = plist_label(&cfg, "check");
+            assert_eq!(label, "com.restic-backup.john-doe.check");
+        }
+
+        #[test]
+        fn schedule_interval_format() {
+            let xml = schedule_interval(3600);
+            assert!(xml.contains("<key>StartInterval</key>"));
+            assert!(xml.contains("<integer>3600</integer>"));
+        }
+
+        #[test]
         fn calendar_contains_weekday_when_present() {
             let xml = schedule_calendar(Some(0), 3, 30);
             assert!(xml.contains("<key>Weekday</key>"));
             assert!(xml.contains("<integer>0</integer>"));
+        }
+
+        #[test]
+        fn calendar_omits_weekday_when_none() {
+            let xml = schedule_calendar(None, 2, 0);
+            assert!(!xml.contains("Weekday"));
+            assert!(xml.contains("<key>Hour</key>"));
+            assert!(xml.contains("<integer>2</integer>"));
+        }
+
+        #[test]
+        fn plist_document_contains_label_and_exe() {
+            let cfg = dummy_config();
+            let exe = PathBuf::from("/usr/local/bin/restic-backup");
+            let xml = plist_document(&cfg, &exe, "backup", &schedule_interval(3600));
+            assert!(xml.contains("com.restic-backup.alice.backup"));
+            assert!(xml.contains("/usr/local/bin/restic-backup"));
+            assert!(xml.contains("<string>backup</string>"));
+            assert!(xml.contains("backup.launchd.out.log"));
+            assert!(xml.contains("backup.launchd.err.log"));
+        }
+
+        #[test]
+        fn plist_document_escapes_special_chars_in_exe() {
+            let cfg = dummy_config();
+            let exe = PathBuf::from("/path/with/<special>&chars/bin");
+            let xml = plist_document(&cfg, &exe, "backup", &schedule_interval(60));
+            assert!(xml.contains("&lt;special&gt;&amp;chars"));
         }
     }
 }
@@ -828,12 +1133,114 @@ mod app {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::path::PathBuf;
+
+        fn dummy_config() -> Config {
+            Config {
+                home_dir: PathBuf::from("/home/alice"),
+                username: "alice".to_string(),
+                secrets_path: PathBuf::from("/home/alice/.secrets/env"),
+                state_dir: PathBuf::from("/home/alice/.state"),
+                log_dir: PathBuf::from("/home/alice/.logs"),
+                cache_dir: PathBuf::from("/home/alice/.cache"),
+                backup_source: PathBuf::from("/home/alice"),
+                hostname: "myhost".to_string(),
+                ntfy_server: "https://ntfy.sh".to_string(),
+                keep_hourly: "24".to_string(),
+                keep_daily: "14".to_string(),
+                keep_weekly: "4".to_string(),
+                keep_monthly: "12".to_string(),
+                keep_yearly: "10".to_string(),
+                check_percent: "10".to_string(),
+            }
+        }
 
         #[test]
         fn normalizes_percent() {
             assert_eq!(normalized_subset_percent("10"), "10%");
             assert_eq!(normalized_subset_percent("10%"), "10%");
             assert_eq!(normalized_subset_percent(" 25% "), "25%");
+        }
+
+        #[test]
+        fn normalized_percent_empty_string() {
+            // Edge: empty input → just "%"
+            assert_eq!(normalized_subset_percent(""), "%");
+        }
+
+        #[test]
+        fn backup_args_structure() {
+            let cfg = dummy_config();
+            let args = backup_args(&cfg);
+            assert_eq!(args[0], "backup");
+            assert_eq!(args[1], "/home/alice");
+            assert!(args.contains(&"--tag".to_string()));
+            assert!(args.contains(&"myhost".to_string()));
+            assert!(args.contains(&"--exclude-caches".to_string()));
+            assert!(args.contains(&"--exclude".to_string()));
+            // The excluded path must be under home/Library/Caches.
+            let excl_idx = args.iter().position(|a| a == "--exclude").unwrap();
+            assert!(args[excl_idx + 1].contains("Caches"));
+        }
+
+        #[test]
+        fn backup_args_uses_backup_source_not_home_when_different() {
+            let mut cfg = dummy_config();
+            cfg.backup_source = PathBuf::from("/data/important");
+            let args = backup_args(&cfg);
+            assert_eq!(args[1], "/data/important");
+        }
+
+        #[test]
+        fn check_args_structure() {
+            let cfg = dummy_config();
+            let args = check_args(&cfg);
+            assert_eq!(args[0], "check");
+            assert_eq!(args[1], "--read-data-subset");
+            assert_eq!(args[2], "10%");
+        }
+
+        #[test]
+        fn check_args_normalizes_percent() {
+            let mut cfg = dummy_config();
+            cfg.check_percent = "20%".to_string();
+            let args = check_args(&cfg);
+            assert_eq!(args[2], "20%");
+        }
+
+        #[test]
+        fn forget_args_structure() {
+            let cfg = dummy_config();
+            let args = forget_args(&cfg);
+            assert_eq!(args[0], "forget");
+            assert!(args.contains(&"--tag".to_string()));
+            assert!(args.contains(&"myhost".to_string()));
+            assert!(args.contains(&"--keep-hourly".to_string()));
+            assert!(args.contains(&"24".to_string()));
+            assert!(args.contains(&"--keep-daily".to_string()));
+            assert!(args.contains(&"14".to_string()));
+            assert!(args.contains(&"--keep-weekly".to_string()));
+            assert!(args.contains(&"4".to_string()));
+            assert!(args.contains(&"--keep-monthly".to_string()));
+            assert!(args.contains(&"12".to_string()));
+            assert!(args.contains(&"--keep-yearly".to_string()));
+            assert!(args.contains(&"10".to_string()));
+        }
+
+        #[test]
+        fn forget_args_uses_config_retention_values() {
+            let mut cfg = dummy_config();
+            cfg.keep_daily = "30".to_string();
+            cfg.keep_yearly = "5".to_string();
+            let args = forget_args(&cfg);
+            assert!(args.contains(&"30".to_string()));
+            assert!(args.contains(&"5".to_string()));
+        }
+
+        #[test]
+        fn prune_args_is_just_prune() {
+            let args = prune_args();
+            assert_eq!(args, vec!["prune".to_string()]);
         }
     }
 }
