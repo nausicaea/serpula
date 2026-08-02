@@ -1,0 +1,50 @@
+---
+fail_fast: true
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # These will modify code
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: fix-byte-order-marker
+
+      # These will verify only
+      - id: check-yaml
+      - id: check-json
+      - id: check-xml
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-illegal-windows-names
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: check-vcs-permalinks
+      - id: forbid-submodules
+
+  - repo: https://github.com/thoughtworks/talisman
+    rev: v1.37.0
+    hooks:
+      - id: talisman-push
+      - id: talisman-commit
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.17.0
+    hooks:
+      - id: commitizen
+
+  - repo: https://rosa.radicle.network/z2u7x2qgAhLqCFcMiy5CBGfZem19f.git
+    rev: fe6054596a86345201c2c104925ca5d33e21e987
+    hooks:
+      - id: cargo-fmt-check
+      - id: cargo-check
+      - id: clippy
+      - id: cargo-test
+      - id: cargo-fmt
+      - id: cargo-fix
+      - id: clippy-fix
+      - id: mutants
+      - id: audit
+      - id: tarpaulin
