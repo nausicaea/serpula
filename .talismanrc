@@ -1,4 +1,8 @@
 fileignoreconfig:
 - filename: .github/workflows/ci.yml
   checksum: e18a0e741939696754b7bf6f9df4a764259f88ee931da3afa376f6f405a0e062
+- filename: Cargo.lock
+  checksum: 4cdc3fca2c7bcd5eadd2917a8f47c5236d5237935bdcd54b2a71200c05f8a03e
+- filename: src/main.rs
+  checksum: b9be22c048d9b7ae4b31a7a31e8ec32f9eb7e6397db7918a8dbb0ce99d0629a1
 version: "1.0"
