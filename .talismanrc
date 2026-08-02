@@ -4,5 +4,5 @@ fileignoreconfig:
 - filename: Cargo.lock
   checksum: 4cdc3fca2c7bcd5eadd2917a8f47c5236d5237935bdcd54b2a71200c05f8a03e
 - filename: src/main.rs
-  checksum: b9be22c048d9b7ae4b31a7a31e8ec32f9eb7e6397db7918a8dbb0ce99d0629a1
+  checksum: 4c904b7d8994d1328e8b39a6083b7c00dfc25502ed19513ddde84ae882fc7b3e
 version: "1.0"
