@@ -1,0 +1,4 @@
+fileignoreconfig:
+- filename: .github/workflows/ci.yml
+  checksum: e18a0e741939696754b7bf6f9df4a764259f88ee931da3afa376f6f405a0e062
+version: "1.0"
