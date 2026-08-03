@@ -2,7 +2,7 @@ fileignoreconfig:
 - filename: .github/workflows/ci.yml
   checksum: e18a0e741939696754b7bf6f9df4a764259f88ee931da3afa376f6f405a0e062
 - filename: Cargo.lock
-  checksum: 4cdc3fca2c7bcd5eadd2917a8f47c5236d5237935bdcd54b2a71200c05f8a03e
+  checksum: 68c61680c9ab5600b07e75bb5349f5b2cf8864913278b12c8cd56356111707f5
 - filename: src/main.rs
-  checksum: d9659f155bea09f4d5052e8b1f664acbd26fd59db74ffb494b8029462c2cafe5
+  checksum: 4abdcf2e1dd3a95b7ab644c4f396b67ee3705af92a1b37e890ff2c98f9a9b931
 version: "1.0"
