@@ -45,7 +45,7 @@ mod config {
                     .unwrap_or_else(|| "user".to_string())
             });
 
-            let project_dirs = ProjectDirs::from("dev", "personal", "restic-backup")
+            let project_dirs = ProjectDirs::from("net", "nausicaea", "serpula")
                 .ok_or_else(|| anyhow::anyhow!("cannot determine application directories"))?;
             let data_dir = project_dirs.data_local_dir().to_path_buf();
 
