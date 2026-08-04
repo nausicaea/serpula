@@ -1,6 +1,7 @@
 use app::Cli;
 use clap::{Parser, Subcommand};
 use directories::{BaseDirs, ProjectDirs};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -8,171 +9,6 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-mod logger {
-    use super::*;
-    use std::fs;
-
-    #[derive(Debug)]
-    pub struct Logger {
-        file: Mutex<File>,
-        name: String,
-    }
-
-    impl Logger {
-        pub fn new(log_dir: &Path, name: &str) -> anyhow::Result<Self> {
-            fs::create_dir_all(log_dir)?;
-            let path = log_dir.join(format!("{name}.log"));
-            let file = OpenOptions::new().create(true).append(true).open(&path)?;
-            Ok(Self {
-                file: Mutex::new(file),
-                name: name.to_string(),
-            })
-        }
-
-        pub fn info(&self, msg: &str) {
-            self.log("INFO", msg);
-        }
-        pub fn warn(&self, msg: &str) {
-            self.log("WARN", msg);
-        }
-        pub fn error(&self, msg: &str) {
-            self.log("ERROR", msg);
-        }
-
-        fn log(&self, level: &str, msg: &str) {
-            let line = format!("[{}] [{level}] [{}] {msg}\n", timestamp(), self.name);
-            eprint!("{line}");
-            if let Ok(mut f) = self.file.lock() {
-                let _ = f.write_all(line.as_bytes());
-            }
-        }
-    }
-
-    fn timestamp() -> String {
-        Command::new("date")
-            .arg("+%Y-%m-%dT%H:%M:%S%z")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| {
-                let secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                format!("epoch:{secs}")
-            })
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        fn make_tmp() -> std::path::PathBuf {
-            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir()
-                .join(format!("serpula-test-logger-{}-{id}", std::process::id()));
-            fs::create_dir_all(&dir).unwrap();
-            dir
-        }
-
-        /// Helper: create a Logger backed by a real temp file and return (logger, log_path).
-        fn make_logger(tmp: &std::path::Path, name: &str) -> (Logger, std::path::PathBuf) {
-            let logger = Logger::new(tmp, name).unwrap();
-            let log_path = tmp.join(format!("{name}.log"));
-            (logger, log_path)
-        }
-
-        // --- logger::Logger::info / warn / error / log mutants ---
-
-        #[test]
-        fn info_writes_info_level_to_file() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "info_test");
-            logger.info("hello from info");
-            let content = fs::read_to_string(&log_path).unwrap();
-            assert!(
-                content.contains("[INFO]"),
-                "expected [INFO] in log, got: {content}"
-            );
-            assert!(content.contains("hello from info"));
-        }
-
-        #[test]
-        fn warn_writes_warn_level_to_file() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "warn_test");
-            logger.warn("something suspicious");
-            let content = fs::read_to_string(&log_path).unwrap();
-            assert!(
-                content.contains("[WARN]"),
-                "expected [WARN] in log, got: {content}"
-            );
-            assert!(content.contains("something suspicious"));
-        }
-
-        #[test]
-        fn error_writes_error_level_to_file() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "error_test");
-            logger.error("fatal problem");
-            let content = fs::read_to_string(&log_path).unwrap();
-            assert!(
-                content.contains("[ERROR]"),
-                "expected [ERROR] in log, got: {content}"
-            );
-            assert!(content.contains("fatal problem"));
-        }
-
-        #[test]
-        fn log_includes_logger_name_in_output() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "myservice");
-            logger.info("msg");
-            let content = fs::read_to_string(&log_path).unwrap();
-            assert!(
-                content.contains("myservice"),
-                "logger name missing from log line"
-            );
-        }
-
-        #[test]
-        fn log_line_is_non_empty_and_not_placeholder() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "ts_test");
-            logger.info("check timestamp");
-            let content = fs::read_to_string(&log_path).unwrap();
-            // The line must not be empty and must not contain the mutation sentinel "xyzzy".
-            assert!(!content.trim().is_empty());
-            assert!(
-                !content.contains("xyzzy"),
-                "timestamp was replaced with sentinel"
-            );
-            // The timestamp bracket must be present (non-empty timestamp).
-            assert!(content.starts_with('['), "log line should start with '['");
-        }
-
-        #[test]
-        fn info_warn_error_produce_distinct_level_tags() {
-            let tmp = make_tmp();
-            let (logger, log_path) = make_logger(&tmp, "levels_test");
-            logger.info("i");
-            logger.warn("w");
-            logger.error("e");
-            let content = fs::read_to_string(&log_path).unwrap();
-            assert!(content.contains("[INFO]"));
-            assert!(content.contains("[WARN]"));
-            assert!(content.contains("[ERROR]"));
-        }
-    }
-}
 
 mod config {
     use super::*;
@@ -770,16 +606,13 @@ mod lockfile {
 mod notify {
     use super::*;
     use crate::config::Config;
-    use crate::logger::Logger;
     use crate::secrets::get_ntfy_topic;
 
-    pub fn notify_failure(config: &Config, logger: &Logger, subcommand: &str, message: &str) {
+    pub fn notify_failure(config: &Config, subcommand: &str, message: &str) {
         let topic = match get_ntfy_topic(config) {
             Ok(t) => t,
             Err(e) => {
-                logger.warn(&format!(
-                    "cannot resolve ntfy topic, skipping notification: {e}"
-                ));
+                warn!("cannot resolve ntfy topic, skipping notification: {e}");
                 return;
             }
         };
@@ -797,12 +630,12 @@ mod notify {
             .output();
 
         match result {
-            Ok(o) if o.status.success() => logger.info("failure notification sent"),
-            Ok(o) => logger.warn(&format!(
+            Ok(o) if o.status.success() => info!("failure notification sent"),
+            Ok(o) => warn!(
                 "ntfy notification failed: {}",
                 String::from_utf8_lossy(&o.stderr).trim()
-            )),
-            Err(e) => logger.warn(&format!("failed to invoke curl for notification: {e}")),
+            ),
+            Err(e) => warn!("failed to invoke curl for notification: {e}"),
         }
     }
 
@@ -848,64 +681,6 @@ mod notify {
             }
         }
 
-        fn make_logger(root: &std::path::Path) -> Logger {
-            fs::create_dir_all(root.join("logs")).unwrap();
-            Logger::new(&root.join("logs"), "notify_test").unwrap()
-        }
-
-        // --- notify::notify_failure replaced with () mutant (line 616) ---
-        // If notify_failure were a no-op, the logger would never receive the
-        // "failure notification sent" or "ntfy notification failed" warn message.
-        // We verify that calling it at least attempts the curl invocation (which
-        // will fail because the URL is invalid) and logs a warning — proving the
-        // function body actually runs.
-        #[test]
-        fn notify_failure_runs_and_logs_when_topic_available() {
-            let tmp = make_tmp();
-            unsafe { env::remove_var("NTFY_TOPIC") };
-            let config = make_config_with_topic(&tmp, "test-topic-abc");
-            let logger = make_logger(&tmp);
-
-            // This will attempt curl to an invalid host and log a warning.
-            // The important thing is it does NOT panic and the log file gets written.
-            notify_failure(&config, &logger, "backup", "test failure message");
-
-            let log_path = tmp.join("logs").join("notify_test.log");
-            let content = fs::read_to_string(&log_path).unwrap_or_default();
-            // Either "failure notification sent" (curl succeeded somehow) or a warn
-            // about curl failing — either way the function body ran.
-            assert!(
-                content.contains("notification")
-                    || content.contains("curl")
-                    || content.contains("ntfy"),
-                "notify_failure must produce log output, got: {content}"
-            );
-        }
-
-        // --- match guard o.status.success() replaced with true (line 639) ---
-        // If the guard were always true, a failed curl would be logged as success.
-        // We verify that when curl fails (invalid URL), the warn branch is taken,
-        // not the info branch.
-        #[test]
-        fn notify_failure_logs_warn_not_info_when_curl_fails() {
-            let tmp = make_tmp();
-            unsafe { env::remove_var("NTFY_TOPIC") };
-            let config = make_config_with_topic(&tmp, "test-topic-xyz");
-            let logger = make_logger(&tmp);
-
-            notify_failure(&config, &logger, "check", "curl will fail");
-
-            let log_path = tmp.join("logs").join("notify_test.log");
-            let content = fs::read_to_string(&log_path).unwrap_or_default();
-            // curl to an invalid host must fail → the WARN branch must fire,
-            // NOT the INFO "failure notification sent" branch.
-            // (If the guard were always true, INFO would appear instead of WARN.)
-            assert!(
-                !content.contains("[INFO] [notify_test] failure notification sent"),
-                "curl to invalid host must not produce 'failure notification sent' INFO, got: {content}"
-            );
-        }
-
         // --- match guard o.status.success() replaced with false (line 639) ---
         // If the guard were always false, even a successful curl would be logged
         // as a warning. We can't easily make curl succeed in a unit test, but we
@@ -915,9 +690,8 @@ mod notify {
             let tmp = make_tmp();
             unsafe { env::remove_var("NTFY_TOPIC") };
             let config = make_config_with_topic(&tmp, "some-topic");
-            let logger = make_logger(&tmp);
             // Must not panic regardless of curl outcome.
-            notify_failure(&config, &logger, "prune", "any message");
+            notify_failure(&config, "prune", "any message");
         }
 
         // --- notify_failure early-returns when topic resolution fails ---
@@ -947,9 +721,8 @@ mod notify {
                 keep_yearly: "10".to_string(),
                 check_percent: "10".to_string(),
             };
-            let logger = make_logger(&tmp);
             // Must not panic; should log a warning about skipping notification.
-            notify_failure(&config, &logger, "forget", "msg");
+            notify_failure(&config, "forget", "msg");
             let log_path = tmp.join("logs").join("notify_test.log");
             let content = fs::read_to_string(&log_path).unwrap_or_default();
             assert!(
@@ -962,14 +735,9 @@ mod notify {
 
 mod restic {
     use super::*;
-    use crate::logger::Logger;
 
-    pub fn run_restic(
-        args: &[String],
-        env_vars: &HashMap<String, String>,
-        logger: &Logger,
-    ) -> anyhow::Result<()> {
-        logger.info(&format!("executing: restic {}", args.join(" ")));
+    pub fn run_restic(args: &[String], env_vars: &HashMap<String, String>) -> anyhow::Result<()> {
+        info!("executing: restic {}", args.join(" "));
 
         let output = Command::new("restic")
             .args(args)
@@ -981,10 +749,10 @@ mod restic {
             })?;
 
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            logger.info(&format!("restic: {line}"));
+            info!("restic: {line}");
         }
         for line in String::from_utf8_lossy(&output.stderr).lines() {
-            logger.warn(&format!("restic: {line}"));
+            info!("restic: {line}");
         }
 
         if !output.status.success() {
@@ -1023,10 +791,6 @@ mod restic {
             dir
         }
 
-        fn make_logger(tmp: &std::path::Path) -> Logger {
-            Logger::new(tmp, "restic_test").unwrap()
-        }
-
         // --- restic::run_restic -> Ok(()) mutant (line 658) ---
         // If run_restic always returned Ok(()), a failing restic invocation would
         // not be reported as an error. We verify that a non-zero exit from a real
@@ -1036,7 +800,6 @@ mod restic {
         #[test]
         fn run_restic_errors_on_nonzero_exit() {
             let tmp = make_tmp();
-            let logger = make_logger(&tmp);
             // Invoke `false` (always exits 1) via the restic wrapper by pointing
             // PATH at a directory containing a `restic` script that calls false.
             // Simpler: just call a known-failing binary directly by swapping the
@@ -1058,7 +821,7 @@ mod restic {
             env_vars.insert("PATH".to_string(), bin_dir.to_string_lossy().to_string());
 
             let args: Vec<String> = vec!["snapshots".to_string()];
-            let result = run_restic(&args, &env_vars, &logger);
+            let result = run_restic(&args, &env_vars);
             assert!(
                 result.is_err(),
                 "run_restic must return Err when restic exits non-zero"
@@ -1076,7 +839,6 @@ mod restic {
         #[test]
         fn run_restic_ok_on_zero_exit() {
             let tmp = make_tmp();
-            let logger = make_logger(&tmp);
 
             let bin_dir = tmp.join("bin2");
             fs::create_dir_all(&bin_dir).unwrap();
@@ -1089,7 +851,7 @@ mod restic {
             env_vars.insert("PATH".to_string(), bin_dir.to_string_lossy().to_string());
 
             let args: Vec<String> = vec!["snapshots".to_string()];
-            let result = run_restic(&args, &env_vars, &logger);
+            let result = run_restic(&args, &env_vars);
             assert!(
                 result.is_ok(),
                 "run_restic must return Ok(()) when restic exits 0"
@@ -1105,7 +867,6 @@ mod restic {
         #[test]
         fn run_restic_error_message_contains_exit_code() {
             let tmp = make_tmp();
-            let logger = make_logger(&tmp);
 
             let bin_dir = tmp.join("bin3");
             fs::create_dir_all(&bin_dir).unwrap();
@@ -1118,7 +879,7 @@ mod restic {
             env_vars.insert("PATH".to_string(), bin_dir.to_string_lossy().to_string());
 
             let args: Vec<String> = vec!["backup".to_string()];
-            let err = run_restic(&args, &env_vars, &logger).unwrap_err();
+            let err = run_restic(&args, &env_vars).unwrap_err();
             let msg = format!("{err}");
             assert!(
                 msg.contains("42"),
@@ -1324,7 +1085,6 @@ mod app {
     use crate::config::Config;
     use crate::launchd::{plist_document, plist_label, schedule_calendar, schedule_interval};
     use crate::lockfile::acquire_lock;
-    use crate::logger::Logger;
     use crate::notify::notify_failure;
     use crate::restic::run_restic;
     use crate::secrets::{build_restic_env, ensure_secrets_scaffold, get_ntfy_topic};
@@ -1334,14 +1094,14 @@ mod app {
     /// Secrets (RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID,
     /// AWS_SECRET_ACCESS_KEY, NTFY_TOPIC) live in a 0600 file under the app's
     /// local data directory (see `install` output for the exact path).
-    #[derive(Parser)]
+    #[derive(Debug, Parser)]
     #[command(name = "restic-backup", version, about, long_about = None)]
     pub struct Cli {
         #[command(subcommand)]
         pub command: CliCommand,
     }
 
-    #[derive(Subcommand)]
+    #[derive(Debug, Subcommand)]
     pub enum CliCommand {
         /// Run `restic backup` against $HOME (or $BACKUP_PATH), tagged with the
         /// hostname, excluding caches. Intended to run hourly.
@@ -1355,7 +1115,7 @@ mod app {
         /// Run `restic prune` to reclaim space from forgotten snapshots.
         /// Intended daily, after forget.
         Prune,
-        /// Generate and load launchd agents for the four subcommands above.
+        /// Generate launchd agents for the four subcommands above.
         Install,
     }
 
@@ -1368,35 +1128,35 @@ mod app {
             CliCommand::Install => match cmd_install() {
                 Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("install failed: {e}");
+                    error!("install failed: {e}");
                     1
                 }
             },
         }
     }
 
-    pub fn cmd_backup(logger: &Logger, config: &Config) -> anyhow::Result<()> {
+    pub fn cmd_backup(config: &Config) -> anyhow::Result<()> {
         let env_vars = build_restic_env(config)?;
         let args = backup_args(config);
-        run_restic(&args, &env_vars, logger)
+        run_restic(&args, &env_vars)
     }
 
-    pub fn cmd_check(logger: &Logger, config: &Config) -> anyhow::Result<()> {
+    pub fn cmd_check(config: &Config) -> anyhow::Result<()> {
         let env_vars = build_restic_env(config)?;
         let args = check_args(config);
-        run_restic(&args, &env_vars, logger)
+        run_restic(&args, &env_vars)
     }
 
-    pub fn cmd_forget(logger: &Logger, config: &Config) -> anyhow::Result<()> {
+    pub fn cmd_forget(config: &Config) -> anyhow::Result<()> {
         let env_vars = build_restic_env(config)?;
         let args = forget_args(config);
-        run_restic(&args, &env_vars, logger)
+        run_restic(&args, &env_vars)
     }
 
-    pub fn cmd_prune(logger: &Logger, config: &Config) -> anyhow::Result<()> {
+    pub fn cmd_prune(config: &Config) -> anyhow::Result<()> {
         let env_vars = build_restic_env(config)?;
         let args = prune_args();
-        run_restic(&args, &env_vars, logger)
+        run_restic(&args, &env_vars)
     }
 
     fn cmd_install() -> anyhow::Result<()> {
@@ -1436,21 +1196,6 @@ mod app {
             fs::write(&path, xml)?;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
             println!("wrote {}", path.display());
-
-            let _ = Command::new("launchctl").arg("unload").arg(&path).output();
-            let load = Command::new("launchctl")
-                .arg("load")
-                .arg("-w")
-                .arg(&path)
-                .output()
-                .map_err(|e| anyhow::anyhow!("failed to invoke launchctl: {e}"))?;
-            if !load.status.success() {
-                anyhow::bail!(
-                    "launchctl load failed for {label}: {}",
-                    String::from_utf8_lossy(&load.stderr)
-                );
-            }
-            println!("loaded {label}");
         }
 
         println!();
@@ -1467,47 +1212,35 @@ mod app {
         Ok(())
     }
 
-    pub fn guarded_run(name: &str, f: fn(&Logger, &Config) -> anyhow::Result<()>) -> i32 {
+    pub fn guarded_run(name: &str, f: fn(&Config) -> anyhow::Result<()>) -> i32 {
         let config = match Config::load() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("configuration error: {e}");
-                return 1;
-            }
-        };
-        let logger = match Logger::new(&config.log_dir, name) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("cannot open log file: {e}");
+                error!("configuration error: {e}");
                 return 1;
             }
         };
 
-        logger.info(&format!("=== {name} starting ==="));
+        info!("=== {name} starting ===");
 
         let lock_path = config.state_dir.join("resticbackup.lock");
         let _lock = match acquire_lock(&lock_path) {
             Ok(fh) => fh,
             Err(e) => {
-                logger.error(&format!("failed to acquire lock: {e}"));
-                notify_failure(
-                    &config,
-                    &logger,
-                    name,
-                    &format!("failed to acquire lock: {e}"),
-                );
+                error!("failed to acquire lock: {e}");
+                notify_failure(&config, name, &format!("failed to acquire lock: {e}"));
                 return 1;
             }
         };
 
-        match f(&logger, &config) {
+        match f(&config) {
             Ok(()) => {
-                logger.info(&format!("=== {name} completed successfully ==="));
+                info!("=== {name} completed successfully ===");
                 0
             }
             Err(e) => {
-                logger.error(&format!("=== {name} failed: {e} ==="));
-                notify_failure(&config, &logger, name, &e.to_string());
+                error!("=== {name} failed: {e} ===");
+                notify_failure(&config, name, &e.to_string());
                 1
             }
         }
@@ -1722,11 +1455,6 @@ mod app {
             .unwrap();
         }
 
-        fn make_logger_for(config: &Config, name: &str) -> Logger {
-            std::fs::create_dir_all(&config.log_dir).unwrap();
-            Logger::new(&config.log_dir, name).unwrap()
-        }
-
         // --- cmd_backup propagates build_restic_env errors (kills Ok(()) mutant) ---
         #[test]
         fn cmd_backup_errors_when_secrets_missing() {
@@ -1735,8 +1463,7 @@ mod app {
             // No secrets file → build_restic_env must fail → cmd_backup must Err.
             std::fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
             std::fs::write(&config.secrets_path, "").unwrap();
-            let logger = make_logger_for(&config, "backup");
-            let result = cmd_backup(&logger, &config);
+            let result = cmd_backup(&config);
             assert!(result.is_err(), "cmd_backup must propagate secrets error");
         }
 
@@ -1747,8 +1474,7 @@ mod app {
             let config = make_full_config(&tmp);
             std::fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
             std::fs::write(&config.secrets_path, "").unwrap();
-            let logger = make_logger_for(&config, "check");
-            let result = cmd_check(&logger, &config);
+            let result = cmd_check(&config);
             assert!(result.is_err(), "cmd_check must propagate secrets error");
         }
 
@@ -1759,8 +1485,7 @@ mod app {
             let config = make_full_config(&tmp);
             std::fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
             std::fs::write(&config.secrets_path, "").unwrap();
-            let logger = make_logger_for(&config, "forget");
-            let result = cmd_forget(&logger, &config);
+            let result = cmd_forget(&config);
             assert!(result.is_err(), "cmd_forget must propagate secrets error");
         }
 
@@ -1771,8 +1496,7 @@ mod app {
             let config = make_full_config(&tmp);
             std::fs::create_dir_all(config.secrets_path.parent().unwrap()).unwrap();
             std::fs::write(&config.secrets_path, "").unwrap();
-            let logger = make_logger_for(&config, "prune");
-            let result = cmd_prune(&logger, &config);
+            let result = cmd_prune(&config);
             assert!(result.is_err(), "cmd_prune must propagate secrets error");
         }
 
@@ -1784,10 +1508,9 @@ mod app {
             let tmp = make_tmp_app();
             let config = make_full_config(&tmp);
             write_valid_secrets(&config);
-            let logger = make_logger_for(&config, "backup");
             // restic is not installed in CI, so we expect an error about spawning
             // restic, NOT about missing secrets.
-            let result = cmd_backup(&logger, &config);
+            let result = cmd_backup(&config);
             if let Err(ref e) = result {
                 let msg = format!("{e}");
                 assert!(
@@ -1803,7 +1526,7 @@ mod app {
         #[test]
         fn guarded_run_returns_one_when_inner_fn_errors() {
             // We pass a function that always returns an error.
-            fn always_fail(_logger: &Logger, _config: &Config) -> anyhow::Result<()> {
+            fn always_fail(_config: &Config) -> anyhow::Result<()> {
                 Err(anyhow::anyhow!("deliberate failure"))
             }
             // guarded_run calls Config::load() internally; set env so it can succeed.
@@ -1819,7 +1542,7 @@ mod app {
         // --- guarded_run returns 0 on success (kills always-1 / always-(-1) mutants) ---
         #[test]
         fn guarded_run_returns_zero_when_inner_fn_succeeds() {
-            fn always_ok(_logger: &Logger, _config: &Config) -> anyhow::Result<()> {
+            fn always_ok(_config: &Config) -> anyhow::Result<()> {
                 Ok(())
             }
             // If Config::load() fails in this environment, the test is inconclusive
@@ -1842,10 +1565,10 @@ mod app {
             // Backup/Check/Forget/Prune all go through guarded_run which returns 0 or 1.
             // We can't easily test Install without launchctl, but we can test the
             // guarded variants.
-            fn always_ok(_l: &Logger, _c: &Config) -> anyhow::Result<()> {
+            fn always_ok(_c: &Config) -> anyhow::Result<()> {
                 Ok(())
             }
-            fn always_err(_l: &Logger, _c: &Config) -> anyhow::Result<()> {
+            fn always_err(_c: &Config) -> anyhow::Result<()> {
                 Err(anyhow::anyhow!("x"))
             }
             let ok_code = guarded_run("x", always_ok);
@@ -1907,7 +1630,6 @@ mod app {
 mod main_tests {
     use super::*;
     use crate::config::Config;
-    use crate::logger::Logger;
     use app::{CliCommand, execute, guarded_run};
 
     #[test]
@@ -1915,7 +1637,7 @@ mod main_tests {
         // main() calls execute() and passes the result to process::exit.
         // We verify execute() returns a value that would be meaningful to exit():
         // it must be 0 or 1, never -1 or some other sentinel.
-        fn always_err(_l: &Logger, _c: &Config) -> anyhow::Result<()> {
+        fn always_err(_c: &Config) -> anyhow::Result<()> {
             Err(anyhow::anyhow!("main test failure"))
         }
         let code = guarded_run("main-test", always_err);
