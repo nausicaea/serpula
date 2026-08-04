@@ -201,10 +201,11 @@ mod secrets {
     }
 
     pub fn get_ntfy_topic(config: &Config) -> anyhow::Result<String> {
-        if let Ok(t) = env::var("NTFY_TOPIC")
-            && !t.trim().is_empty()
-        {
-            return Ok(t);
+        if let Ok(t) = env::var("NTFY_TOPIC") {
+            let t_trimmed = t.trim();
+            if !t_trimmed.is_empty() {
+                return Ok(t_trimmed.to_string());
+            }
         }
 
         let mut sec = load_secrets(&config.secrets_path)?;
