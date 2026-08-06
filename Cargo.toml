@@ -9,3 +9,7 @@ clap = { version = "4.6.5", features = ["derive"] }
 directories = "6.0.0"
 env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "color", "humantime"] }
 log = "0.4.33"
+ureq = "3.3.0"
+
+[dev-dependencies]
+proptest = "1.11.0"

@@ -17,6 +17,7 @@ repos:
       - id: check-case-conflict
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
+        exclude: ".*.rs"
       - id: check-illegal-windows-names
       - id: check-merge-conflict
       - id: check-symlinks
