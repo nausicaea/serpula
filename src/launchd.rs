@@ -3,6 +3,10 @@ use std::path::Path;
 
 use crate::config::Config;
 
+const MAX_LABEL_LEN: usize = 63;
+const MAX_NAME_LEN: usize = 255;
+const FALLBACK_LABEL: &str = "label";
+
 pub fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -11,17 +15,68 @@ pub fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub fn sanitize(s: &str) -> String {
-    s.chars()
+/// This attempts to follow IETF RFC 1035
+///
+/// Strategy:
+/// 1. Any character that isn't an ASCII letter, digit, or hyphen is mapped
+///    to a hyphen.
+/// 2. Runs of consecutive hyphens are collapsed to a single hyphen (this is
+///    what makes the function idempotent and guarantees no long hyphen
+///    runs, at the cost of not preserving multi-hyphen sequences that were
+///    already present, e.g. "a--b" -> "a-b").
+/// 3. Leading and trailing hyphens are stripped, since a label must start
+///    and end with an alphanumeric character.
+/// 4. The result is truncated to 63 characters (the RFC 1035 label limit),
+///    with any hyphen left dangling by truncation removed.
+/// 5. If nothing valid survives, a fallback label is returned so the
+///    result is never empty.
+pub fn sanitize_as_domain_label(s: &str) -> String {
+    // Step 1: replace invalid characters with '-'.
+    let mapped: String = s
+        .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+        .collect();
+
+    // Step 2: collapse consecutive hyphens.
+    let mut collapsed = String::with_capacity(mapped.len());
+    let mut prev_was_hyphen = false;
+    for c in mapped.chars() {
+        if c == '-' {
+            if !prev_was_hyphen {
+                collapsed.push('-');
+            }
+            prev_was_hyphen = true;
+        } else {
+            collapsed.push(c);
+            prev_was_hyphen = false;
+        }
+    }
+
+    // Step 3: trim leading/trailing hyphens.
+    let trimmed = collapsed.trim_matches('-');
+
+    // Step 4: truncate to the max label length, then drop any hyphen left
+    // dangling at the new end by truncation.
+    let mut truncated: String = trimmed.chars().take(MAX_LABEL_LEN).collect();
+    while truncated.ends_with('-') {
+        truncated.pop();
+    }
+
+    // Step 5: never return an empty label.
+    if truncated.is_empty() {
+        return FALLBACK_LABEL.to_string();
+    }
+
+    truncated
 }
 
 pub fn plist_label(cfg: &Config, name: &str) -> String {
-    format!(
+    let mut rdn = format!(
         "{TLD}.{DOMAIN}.{SUBDOMAIN}.{}.{name}",
-        sanitize(&cfg.username)
-    )
+        sanitize_as_domain_label(&cfg.username)
+    );
+    rdn.truncate(MAX_NAME_LEN);
+    rdn
 }
 
 pub fn schedule_interval(seconds: u64) -> String {
@@ -103,6 +158,7 @@ mod tests {
             backup_source: PathBuf::from("/home/test"),
             hostname: "myhost".to_string(),
             ntfy_server: "https://ntfy.sh".to_string(),
+            ntfy_prefix: "prefix".into(),
             keep_hourly: "24".to_string(),
             keep_daily: "14".to_string(),
             keep_weekly: "4".to_string(),
@@ -124,12 +180,12 @@ mod tests {
 
     #[test]
     fn sanitize_non_alnum() {
-        assert_eq!(sanitize("john.doe+mac"), "john-doe-mac");
+        assert_eq!(sanitize_as_domain_label("john.doe+mac"), "john-doe-mac");
     }
 
     #[test]
     fn sanitize_alnum_unchanged() {
-        assert_eq!(sanitize("alice123"), "alice123");
+        assert_eq!(sanitize_as_domain_label("alice123"), "alice123");
     }
 
     #[test]
@@ -345,5 +401,123 @@ mod tests {
         assert_eq!(xml_escape("a & b"), "a &amp; b");
         assert_eq!(xml_escape("<<>>&&"), "&lt;&lt;&gt;&gt;&amp;&amp;");
         assert_eq!(xml_escape("日本語 & 中文"), "日本語 &amp; 中文");
+    }
+
+    fn is_valid_label_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '-'
+    }
+
+    proptest! {
+        #[test]
+        fn output_respects_max_length(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(out.len() <= MAX_LABEL_LEN);
+        }
+
+        #[test]
+        fn output_uses_only_valid_characters(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(out.chars().all(is_valid_label_char));
+        }
+
+        #[test]
+        fn output_does_not_start_with_hyphen(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(!out.starts_with('-'));
+        }
+
+        #[test]
+        fn output_does_not_end_with_hyphen(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(!out.ends_with('-'));
+        }
+
+        #[test]
+        fn output_is_deterministic(s in ".*") {
+            prop_assert_eq!(sanitize_as_domain_label(&s), sanitize_as_domain_label(&s));
+        }
+
+        #[test]
+        fn sanitizing_is_idempotent(s in ".*") {
+            let once = sanitize_as_domain_label(&s);
+            let twice = sanitize_as_domain_label(&once);
+            prop_assert_eq!(once, twice);
+        }
+
+        #[test]
+        fn output_is_ascii(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(out.is_ascii());
+        }
+
+        #[test]
+        fn output_is_never_empty(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(!out.is_empty());
+        }
+
+        #[test]
+        fn output_has_no_absurd_hyphen_runs(s in ".*") {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(!out.contains("---"));
+        }
+
+        // FIXED generator: no adjacent hyphens (since the implementation
+        // collapses them), and length capped at 63 to match MAX_LABEL_LEN.
+        // Each repetition contributes at most 2 chars (an optional hyphen
+        // plus an alphanumeric), so {0,31} keeps the total at 1 + 2*31 = 63.
+        #[test]
+        fn valid_ascii_labels_are_left_essentially_unchanged(
+            s in "[a-zA-Z](-?[a-zA-Z0-9]){0,31}"
+        ) {
+            let out = sanitize_as_domain_label(&s);
+            prop_assert!(out.eq_ignore_ascii_case(&s));
+        }
+    }
+
+    #[test]
+    fn empty_input_produces_valid_label() {
+        let out = sanitize_as_domain_label("");
+        assert!(!out.is_empty());
+        assert!(out.len() <= MAX_LABEL_LEN);
+        assert!(out.chars().all(is_valid_label_char));
+        assert!(!out.starts_with('-'));
+        assert!(!out.ends_with('-'));
+    }
+
+    #[test]
+    fn overlong_input_is_truncated_to_limit() {
+        let long_input = "a".repeat(500);
+        let out = sanitize_as_domain_label(&long_input);
+        assert!(out.len() <= MAX_LABEL_LEN);
+        assert!(!out.ends_with('-'));
+    }
+
+    #[test]
+    fn input_of_only_hyphens_is_sanitized() {
+        let out = sanitize_as_domain_label("------");
+        assert!(!out.starts_with('-'));
+        assert!(!out.ends_with('-'));
+        assert_eq!(out, FALLBACK_LABEL);
+    }
+
+    #[test]
+    fn input_with_unicode_is_sanitized_to_ascii() {
+        let out = sanitize_as_domain_label("héllo wörld🚀");
+        assert!(out.is_ascii());
+        assert!(out.chars().all(is_valid_label_char));
+    }
+
+    #[test]
+    fn input_with_underscores_and_spaces_is_sanitized() {
+        let out = sanitize_as_domain_label("my_domain label");
+        assert_eq!(out, "my-domain-label");
+    }
+
+    #[test]
+    fn exactly_max_length_input_is_preserved_in_length() {
+        let input: String = "a".repeat(MAX_LABEL_LEN);
+        let out = sanitize_as_domain_label(&input);
+        assert_eq!(out.len(), MAX_LABEL_LEN);
     }
 }

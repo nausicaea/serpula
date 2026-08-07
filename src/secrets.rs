@@ -7,7 +7,10 @@ use std::{
     path::Path,
 };
 
-use crate::config::{Config, ensure_dir_private};
+use crate::{
+    config::{Config, ensure_dir_private},
+    launchd::sanitize_as_domain_label,
+};
 
 const NTFY_TOPIC: &str = "NTFY_TOPIC";
 
@@ -65,7 +68,7 @@ pub fn get_ntfy_topic(config: &Config) -> anyhow::Result<String> {
         return Ok(t.clone());
     }
 
-    let topic = generate_topic()?;
+    let topic = generate_topic(Some(&config.ntfy_prefix))?;
     sec.insert(NTFY_TOPIC.to_string(), topic.clone());
     save_secrets(&config.secrets_path, &sec)?;
     Ok(topic)
@@ -136,12 +139,17 @@ pub fn serialize_secrets(map: &HashMap<String, String>) -> String {
     out
 }
 
-fn generate_topic() -> anyhow::Result<String> {
+fn generate_topic<S: AsRef<str>>(prefix: Option<&S>) -> anyhow::Result<String> {
     let mut buf = [0u8; 24];
     let mut f = File::open("/dev/urandom")?;
     f.read_exact(&mut buf)?;
     let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(format!("restic-backup-{hex}"))
+    if let Some(prefix) = prefix {
+        let prefix = sanitize_as_domain_label(prefix.as_ref());
+        Ok(format!("{prefix}-{hex}"))
+    } else {
+        Ok(hex.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +183,7 @@ mod tests {
             backup_source: root.join("backup"),
             hostname: "testhost".to_string(),
             ntfy_server: "https://ntfy.sh".to_string(),
+            ntfy_prefix: "prefix".into(),
             keep_hourly: "24".to_string(),
             keep_daily: "14".to_string(),
             keep_weekly: "4".to_string(),
@@ -287,7 +296,7 @@ mod tests {
         fs::write(&config.secrets_path, "").unwrap();
         unsafe { env::remove_var("NTFY_TOPIC") };
         let topic = get_ntfy_topic(&config).unwrap();
-        assert!(topic.starts_with("restic-backup-"));
+        assert!(topic.starts_with("prefix-"));
         // A second call must return the same persisted topic.
         let topic2 = get_ntfy_topic(&config).unwrap();
         assert_eq!(topic, topic2);
@@ -380,7 +389,7 @@ mod tests {
         unsafe { env::remove_var("NTFY_TOPIC") };
         let topic = get_ntfy_topic(&config).unwrap();
         assert!(
-            topic.starts_with("restic-backup-"),
+            topic.starts_with("prefix-"),
             "blank NTFY_TOPIC in file must trigger generation, got: {topic}"
         );
         assert!(!topic.trim().is_empty());
@@ -395,7 +404,7 @@ mod tests {
         unsafe { env::remove_var("NTFY_TOPIC") };
         let topic = get_ntfy_topic(&config).unwrap();
         assert!(
-            topic.starts_with("restic-backup-"),
+            topic.starts_with("prefix-"),
             "whitespace-only NTFY_TOPIC must trigger generation, got: {topic}"
         );
     }

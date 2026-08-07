@@ -15,4 +15,6 @@ fileignoreconfig:
   checksum: 241d53e3a5cefa397674af91bb40f5c0e0b2dabf01870f8020d74fa40085b6ac
 - filename: src/app.rs
   checksum: b35bb6e8eeb173dc39c3918c700608b5bbffdd6672542c734aaa76deeb7565b8
+- filename: proptest-regressions/launchd.txt
+  checksum: dfc50d80101b6654a9b54a93e0372f4a3acdb962c3a5449a7c51ece70198cb17
 version: "1.0"

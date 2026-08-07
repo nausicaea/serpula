@@ -96,6 +96,7 @@ mod tests {
             backup_source: PathBuf::from("/home/alice"),
             hostname: "myhost".to_string(),
             ntfy_server: "https://ntfy.sh".to_string(),
+            ntfy_prefix: "prefix".into(),
             keep_hourly: "24".to_string(),
             keep_daily: "14".to_string(),
             keep_weekly: "4".to_string(),
