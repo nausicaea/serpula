@@ -23,45 +23,36 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum CliCommand {
-    /// Run `restic backup` against $HOME (or $BACKUP_PATH), tagged with the
-    /// hostname, excluding caches. Intended to run hourly.
-    Backup,
-    /// Run `restic check --read-data-subset` over a percentage of the
-    /// repository ($RESTIC_CHECK_PERCENT, default 10). Intended weekly.
-    Check,
-    /// Apply the retention policy (keep-hourly/daily/weekly/monthly/yearly,
-    /// overridable via env) to snapshots tagged with the hostname. Intended daily.
-    Forget,
+    /// Proxy any restic command
+    #[command(external_subcommand)]
+    Proxy(Vec<String>),
     /// Generate launchd agents for the four subcommands above.
     Install,
 }
 
 fn main() -> anyhow::Result<()> {
+    env_logger::init();
     let cli = Cli::parse();
     let agent = ureq::Agent::new_with_defaults();
     match cli.command {
-        CliCommand::Backup => guarded_run(&agent, "backup", cmd_backup),
-        CliCommand::Check => guarded_run(&agent, "check", cmd_check),
-        CliCommand::Forget => guarded_run(&agent, "forget", cmd_forget),
+        CliCommand::Proxy(args) => guarded_run(&agent, "proxy", cmd_proxy, &args),
         CliCommand::Install => cmd_install(),
     }
 }
 
-fn cmd_backup(config: &Config) -> anyhow::Result<()> {
+fn cmd_proxy(config: &Config, args: &[String]) -> anyhow::Result<()> {
+    let args = if let Some(subcommand) = args.first() {
+        let default_args = match subcommand.as_str() {
+            "backup" => backup_args(config),
+            "check" => check_args(config),
+            "forget" => forget_args(config),
+            _ => vec![],
+        };
+        [&default_args, &args[1..]].concat()
+    } else {
+        args.to_vec()
+    };
     let env_vars = build_restic_env(config)?;
-    let args = backup_args(config);
-    run_restic(&args, &env_vars)
-}
-
-fn cmd_check(config: &Config) -> anyhow::Result<()> {
-    let env_vars = build_restic_env(config)?;
-    let args = check_args(config);
-    run_restic(&args, &env_vars)
-}
-
-fn cmd_forget(config: &Config) -> anyhow::Result<()> {
-    let env_vars = build_restic_env(config)?;
-    let args = forget_args(config);
     run_restic(&args, &env_vars)
 }
 

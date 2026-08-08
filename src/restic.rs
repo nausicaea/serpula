@@ -5,35 +5,17 @@ use log::info;
 pub fn run_restic(args: &[String], env_vars: &HashMap<String, String>) -> anyhow::Result<()> {
     info!("executing: restic {}", args.join(" "));
 
-    let output = Command::new("restic")
+    let status = Command::new("restic")
         .args(args)
         .env_clear()
         .envs(env_vars)
-        .output()
+        .status()
         .map_err(|e| {
             anyhow::anyhow!("failed to spawn restic (is it installed and on PATH?): {e}")
         })?;
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        info!("restic: {line}");
-    }
-    for line in String::from_utf8_lossy(&output.stderr).lines() {
-        info!("restic: {line}");
-    }
-
-    if !output.status.success() {
-        let code = output.status.code().unwrap_or(-1);
-        let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
-        let tail: Vec<&str> = stderr_text
-            .lines()
-            .rev()
-            .take(5)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-
-        anyhow::bail!("restic exited with status {code}: {}", tail.join(" | "));
+    if !status.success() {
+        anyhow::bail!("restic exited with status {status}");
     }
 
     Ok(())

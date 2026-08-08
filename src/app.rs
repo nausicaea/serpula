@@ -7,11 +7,12 @@ use crate::notify::notify_failure;
 pub fn guarded_run(
     agent: &ureq::Agent,
     name: &str,
-    f: fn(&Config) -> anyhow::Result<()>,
+    f: fn(&Config, &[String]) -> anyhow::Result<()>,
+    args: &[String],
 ) -> anyhow::Result<()> {
     let config = Config::load()?;
 
-    info!("=== {name} starting ===");
+    info!("{name} starting");
 
     let lock_path = config.runtime_dir.join("resticbackup.lock");
     let _lock = acquire_lock(&lock_path).inspect_err(|e| {
@@ -24,10 +25,10 @@ pub fn guarded_run(
         );
     })?;
 
-    f(&config)
-        .inspect(|()| info!("=== {name} completed successfully ==="))
+    f(&config, args)
+        .inspect(|()| info!("{name} completed successfully"))
         .inspect_err(|e| {
-            error!("=== {name} failed: {e} ===");
+            error!("{name} failed: {e}");
             notify_failure(agent, &config, name, &e.to_string());
         })
 }
@@ -43,36 +44,28 @@ pub fn backup_args(config: &Config) -> Vec<String> {
 
     vec![
         "backup".into(),
-        source,
-        "--tag".into(),
-        config.hostname.clone(),
+        format!("--tag={}", config.hostname),
         "--exclude-caches".into(),
-        "--exclude".into(),
-        cache_excl,
+        format!("--exclude={cache_excl}"),
+        source,
     ]
 }
 
 pub fn check_args(config: &Config) -> Vec<String> {
     let subset = normalized_subset_percent(&config.check_percent);
-    vec!["check".into(), "--read-data-subset".into(), subset]
+    vec!["check".into(), format!("--read-data-subset={subset}")]
 }
 
 pub fn forget_args(config: &Config) -> Vec<String> {
     vec![
         "forget".into(),
         "--prune".into(),
-        "--tag".into(),
-        config.hostname.clone(),
-        "--keep-hourly".into(),
-        config.keep_hourly.clone(),
-        "--keep-daily".into(),
-        config.keep_daily.clone(),
-        "--keep-weekly".into(),
-        config.keep_weekly.clone(),
-        "--keep-monthly".into(),
-        config.keep_monthly.clone(),
-        "--keep-yearly".into(),
-        config.keep_yearly.clone(),
+        format!("--tag={}", config.hostname),
+        format!("--keep-hourly={}", config.keep_hourly),
+        format!("--keep-daily={}", config.keep_daily),
+        format!("--keep-weekly={}", config.keep_weekly),
+        format!("--keep-monthly={}", config.keep_monthly),
+        format!("--keep-yearly={}", config.keep_yearly),
     ]
 }
 

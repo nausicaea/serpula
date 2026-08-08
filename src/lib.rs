@@ -1,5 +1,3 @@
-#![feature(gethostname)]
-
 pub mod app;
 pub mod config;
 pub mod launchd;

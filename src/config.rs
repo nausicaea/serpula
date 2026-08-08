@@ -1,10 +1,11 @@
-use anyhow::anyhow;
+use anyhow::{Context, anyhow, bail};
 use directories::ProjectDirs;
 
 use std::{
     env, fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 pub const TLD: &str = "net";
@@ -92,18 +93,30 @@ pub fn ensure_dir_private(path: &Path) -> anyhow::Result<()> {
 }
 
 fn get_hostname() -> anyhow::Result<String> {
-    if let Ok(h) = env::var("RESTIC_BACKUP_HOSTNAME")
-        && !h.trim().is_empty()
-    {
-        return Ok(h);
+    if let Ok(h) = env::var("HOSTNAME").or_else(|_| env::var("hostname")) {
+        let h = h.trim();
+        if !h.is_empty() {
+            return Ok(h.into());
+        }
     }
-    let hostname = std::net::hostname().map_err(|e| anyhow!("failed to get hostname: {e}"))?;
-    let name = hostname
-        .into_string()
-        .map_err(|e| anyhow!("failed to convert hostname to string: {e:?}"))?;
+
+    let output = Command::new("hostname")
+        .output()
+        .context("failed to run hostname(1)")?;
+
+    if !output.status.success() {
+        bail!("hostname(1) exited with status: {}", output.status);
+    }
+
+    let name = String::from_utf8(output.stdout)
+        .context("hostname(1) output was not valid UTF-8")?
+        .trim()
+        .to_string();
+
     if name.is_empty() {
-        return Err(anyhow!("hostname(1) returned empty output"));
+        bail!("hostname(1) returned empty output");
     }
+
     Ok(name)
 }
 
@@ -119,13 +132,13 @@ mod tests {
     #[test]
     fn hostname_from_env_var_is_non_empty_and_not_sentinel() {
         // Covers: replace get_hostname -> Ok(String::new()) and Ok("xyzzy".into())
-        unsafe { env::set_var("RESTIC_BACKUP_HOSTNAME", "my-real-host") };
+        unsafe { env::set_var("hostname", "my-real-host") };
         // Call get_hostname indirectly by checking the env-var branch directly.
-        let h = env::var("RESTIC_BACKUP_HOSTNAME").unwrap();
+        let h = env::var("hostname").unwrap();
         assert!(!h.trim().is_empty(), "hostname must not be empty");
         assert_ne!(h, "xyzzy", "hostname must not be the mutation sentinel");
         assert_eq!(h, "my-real-host");
-        unsafe { env::remove_var("RESTIC_BACKUP_HOSTNAME") };
+        unsafe { env::remove_var("hostname") };
     }
 
     #[test]
@@ -145,9 +158,9 @@ mod tests {
     fn hostname_env_var_takes_precedence_over_system_hostname() {
         // Ensures the env-var fast-path actually returns the env value, not
         // whatever hostname(1) would produce.
-        unsafe { env::set_var("RESTIC_BACKUP_HOSTNAME", "override-host") };
-        let h = env::var("RESTIC_BACKUP_HOSTNAME").unwrap();
+        unsafe { env::set_var("hostname", "override-host") };
+        let h = env::var("hostname").unwrap();
         assert_eq!(h.trim(), "override-host");
-        unsafe { env::remove_var("RESTIC_BACKUP_HOSTNAME") };
+        unsafe { env::remove_var("hostname") };
     }
 }
