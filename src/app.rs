@@ -2,7 +2,7 @@ use log::{error, info};
 
 use crate::config::Config;
 use crate::lockfile::acquire_lock;
-use crate::notify::notify_failure;
+use crate::notify::{Priority, notify_failure};
 
 pub fn guarded_run(
     agent: &ureq::Agent,
@@ -20,6 +20,7 @@ pub fn guarded_run(
         notify_failure(
             agent,
             &config,
+            Priority::Min,
             name,
             &format!("failed to acquire lock: {e}"),
         );
@@ -29,7 +30,7 @@ pub fn guarded_run(
         .inspect(|()| info!("{name} completed successfully"))
         .inspect_err(|e| {
             error!("{name} failed: {e}");
-            notify_failure(agent, &config, name, &e.to_string());
+            notify_failure(agent, &config, Priority::Default, name, &e.to_string());
         })
 }
 

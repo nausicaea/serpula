@@ -3,7 +3,52 @@ use log::{info, warn};
 use crate::config::Config;
 use crate::secrets::get_ntfy_topic;
 
-pub fn notify_failure(agent: &ureq::Agent, config: &Config, subcommand: &str, message: &str) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Priority {
+    /// Really long vibration bursts, default notification sound with a pop-over notification.
+    Max,
+    /// Long vibration burst, default notification sound with a pop-over notification.
+    High,
+    /// Short default vibration and sound. Default notification behavior.
+    #[default]
+    Default,
+    /// No vibration or sound. Notification will not visibly show up until notification drawer is pulled down.
+    Low,
+    /// No vibration or sound. The notification will be under the fold in "Other notifications".
+    Min,
+}
+
+impl From<Priority> for usize {
+    fn from(val: Priority) -> Self {
+        match val {
+            Priority::Max => 5,
+            Priority::High => 4,
+            Priority::Default => 3,
+            Priority::Low => 2,
+            Priority::Min => 1,
+        }
+    }
+}
+
+impl std::fmt::Display for Priority {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Priority::Max => f.write_str("max"),
+            Priority::High => f.write_str("high"),
+            Priority::Default => f.write_str("default"),
+            Priority::Low => f.write_str("low"),
+            Priority::Min => f.write_str("min"),
+        }
+    }
+}
+
+pub fn notify_failure(
+    agent: &ureq::Agent,
+    config: &Config,
+    priority: Priority,
+    subcommand: &str,
+    message: &str,
+) {
     let topic = match get_ntfy_topic(config) {
         Ok(t) => t,
         Err(e) => {
@@ -17,9 +62,8 @@ pub fn notify_failure(agent: &ureq::Agent, config: &Config, subcommand: &str, me
 
     let result = agent
         .post(url)
-        .header("Title", title)
-        .header("Priority", "high")
-        .header("Tags", "warning")
+        .header("X-Title", title)
+        .header("X-Priority", priority.to_string())
         .send(message);
 
     match result {

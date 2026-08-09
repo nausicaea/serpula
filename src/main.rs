@@ -48,7 +48,11 @@ fn cmd_proxy(config: &Config, args: &[String]) -> anyhow::Result<()> {
             "forget" => forget_args(config),
             _ => vec![],
         };
-        [&default_args, &args[1..]].concat()
+        if !default_args.is_empty() {
+            [&default_args, &args[1..]].concat()
+        } else {
+            args.to_vec()
+        }
     } else {
         args.to_vec()
     };
