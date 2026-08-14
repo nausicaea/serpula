@@ -70,9 +70,9 @@ pub fn sanitize_as_domain_label(s: &str) -> String {
     truncated
 }
 
-pub fn plist_label(cfg: &Config, name: &str) -> String {
+pub fn plist_label(cfg: &Config, subcommand: &str) -> String {
     let mut rdn = format!(
-        "{TLD}.{DOMAIN}.{SUBDOMAIN}.{}.{name}",
+        "{TLD}.{DOMAIN}.{SUBDOMAIN}.{}.{subcommand}",
         sanitize_as_domain_label(&cfg.username)
     );
     rdn.truncate(MAX_NAME_LEN);
@@ -96,10 +96,15 @@ pub fn schedule_calendar(weekday: Option<u8>, hour: u8, minute: u8) -> String {
     s
 }
 
-pub fn plist_document(config: &Config, exe: &Path, name: &str, schedule_xml: &str) -> String {
-    let label = plist_label(config, name);
-    let out_log = config.log_dir.join(format!("{name}.stdout.log"));
-    let err_log = config.log_dir.join(format!("{name}.stderr.log"));
+pub fn plist_document(config: &Config, exe: &Path, subcommand: &str, schedule_xml: &str) -> String {
+    let label = xml_escape(&plist_label(config, subcommand));
+    let exe = xml_escape(&exe.to_string_lossy());
+    let subcommand = xml_escape(subcommand);
+    let schedule = schedule_xml;
+    let out_log = config.log_dir.join(format!("{subcommand}.stdout.log"));
+    let err_log = config.log_dir.join(format!("{subcommand}.stderr.log"));
+    let stdout = xml_escape(&out_log.to_string_lossy());
+    let stderr = xml_escape(&err_log.to_string_lossy());
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -107,37 +112,31 @@ pub fn plist_document(config: &Config, exe: &Path, name: &str, schedule_xml: &st
 <plist version="1.0">
 <dict>
 <key>Label</key>
-<string>{}</string>
+<string>{label}</string>
 <key>ProgramArguments</key>
 <array>
-    <string>{}</string>
-    <string>{}</string>
+    <string>{exe}</string>
+    <string>{subcommand}</string>
 </array>
 <key>EnvironmentVariables</key>
 <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
 </dict>
-{}
+{schedule}
 <key>RunAtLoad</key>
 <false/>
 <key>StandardOutPath</key>
-<string>{}</string>
+<string>{stdout}</string>
 <key>StandardErrorPath</key>
-<string>{}</string>
+<string>{stderr}</string>
 <key>ProcessType</key>
 <string>Background</string>
 <key>LowPriorityIO</key>
 <true/>
 </dict>
 </plist>
-"#,
-        xml_escape(&label),
-        xml_escape(&exe.to_string_lossy()),
-        xml_escape(name),
-        schedule_xml,
-        xml_escape(&out_log.to_string_lossy()),
-        xml_escape(&err_log.to_string_lossy()),
+"#
     )
 }
 
