@@ -64,9 +64,9 @@ class Schedule(abc.ABC):
     def build_xml(self, parent: ET.Element): ...
 
 
-@dataclasses.dataclass(frozen=True)
 class Interval(Schedule):
-    seconds: int
+    def __init__(self, seconds: int):
+        self.seconds = seconds
 
     def build_xml(self, parent: ET.Element):
         key = ET.SubElement(parent, "key")
@@ -75,11 +75,11 @@ class Interval(Schedule):
         value.text = str(self.seconds)
 
 
-@dataclasses.dataclass(frozen=True)
 class Calendar(Schedule):
-    weekday: int | None
-    hour: int
-    minute: int
+    def __init__(self, weekday: int | None, hour: int, minute: int):
+        self.weekday = weekday
+        self.hour = hour
+        self.minute = minute
 
     def build_xml(self, parent: ET.Element):
         key = ET.SubElement(parent, "key")
@@ -520,7 +520,7 @@ def cmd_install(context: Context, args: list[str]):
         label = plist_label(context, job.subcommand())
         path = destination / f"{label}.plist"
         xml_data = plist_document(context, job)
-        with path.open(mode="wt") as f:
+        with path.open(mode="wb") as f:
             f.write(xml_data)
 
 
