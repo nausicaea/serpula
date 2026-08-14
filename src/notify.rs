@@ -127,6 +127,6 @@ mod tests {
         let config = make_config_with_topic(&tmp, "some-topic");
         let agent = ureq::Agent::new_with_defaults();
         // Must not panic regardless of curl outcome.
-        notify_failure(&agent, &config, "xyz", "any message");
+        notify_failure(&agent, &config, Priority::Default, "xyz", "any message");
     }
 }
