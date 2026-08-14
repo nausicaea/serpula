@@ -36,18 +36,23 @@ pub fn guarded_run(
 
 pub fn backup_args(config: &Config) -> Vec<String> {
     let source = config.backup_source.to_string_lossy().to_string();
-    let cache_excl = config
+    let cache_excl = config.home_dir.join("Library/Caches");
+    let metadata_excl = config.home_dir.join("Library/Metadata");
+    let group_containers_excl = config.home_dir.join("Library/Group Containers");
+    let file_provider_excl = config
         .home_dir
-        .join("Library")
-        .join("Caches")
-        .to_string_lossy()
-        .to_string();
+        .join("Library/Application Support/FileProvider");
+    let gsu_excl = config.home_dir.join("Library/Google/GoogleSoftwareUpdate");
 
     vec![
         "backup".into(),
         format!("--tag={}", config.hostname),
         "--exclude-caches".into(),
-        format!("--exclude={cache_excl}"),
+        format!("--exclude={}", cache_excl.display()),
+        format!("--exclude={}", metadata_excl.display()),
+        format!("--exclude={}", group_containers_excl.display()),
+        format!("--exclude={}", file_provider_excl.display()),
+        format!("--exclude={}", gsu_excl.display()),
         source,
     ]
 }
