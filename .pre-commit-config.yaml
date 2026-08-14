@@ -25,17 +25,6 @@ repos:
       - id: check-vcs-permalinks
       - id: forbid-submodules
 
-  - repo: https://github.com/thoughtworks/talisman
-    rev: v1.37.0
-    hooks:
-      - id: talisman-push
-      - id: talisman-commit
-
-  - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.17.0
-    hooks:
-      - id: commitizen
-
   - repo: https://rosa.radicle.network/z2u7x2qgAhLqCFcMiy5CBGfZem19f.git
     rev: fe6054596a86345201c2c104925ca5d33e21e987
     hooks:
@@ -55,11 +44,6 @@ repos:
     hooks:
       - id: black
 
-  - repo: https://github.com/trufflesecurity/trufflehog
-    rev: v3.95.9
-    hooks:
-      - id: trufflehog
-
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v2.3.0
     hooks:
@@ -69,3 +53,19 @@ repos:
     rev: v0.15.22
     hooks:
       - id: ruff-check
+
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.95.9
+    hooks:
+      - id: trufflehog
+
+  - repo: https://github.com/thoughtworks/talisman
+    rev: v1.37.0
+    hooks:
+      - id: talisman-push
+      - id: talisman-commit
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.17.0
+    hooks:
+      - id: commitizen
