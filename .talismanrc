@@ -4,7 +4,7 @@ fileignoreconfig:
 - filename: src/main.rs
   checksum: da565b3dc3b442068dc520b8058e823915f19a6ec5a6128fd2ecef5fe3074142
 - filename: Cargo.lock
-  checksum: 18c04e9a294fe29181d9c89c5169ff56953434d56124369e82c3e89e6c4b5304
+  checksum: d8cf5dd7a277cd76347ce50745b209d544179ff1daa022ee1cd96e94296556b7
 - filename: src/config.rs
   checksum: f58c50fe850f708161a337ce939c83344abd326e0773dad44a08f090b997e83a
 - filename: src/launchd.rs
