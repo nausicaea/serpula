@@ -9,6 +9,7 @@ import http
 import http.client
 import os
 import secrets
+import shutil
 import socket
 import ssl
 import subprocess
@@ -16,8 +17,6 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections.abc import Generator, Iterable
-
-RESTIC = "restic"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -290,22 +289,22 @@ def generate_topic(prefix: str | None) -> str:
 
 
 def get_ntfy_topic(context: Context) -> str:
-    NTFY_TOPIC = "NTFY_TOPIC"
-    topic = os.environ.get(NTFY_TOPIC)
+    ntfy_topic = "NTFY_TOPIC"
+    topic = os.environ.get(ntfy_topic)
     if topic is not None:
         topic = topic.strip()
         if len(topic) > 0:
             return topic
 
     secrets = dict(load_env_file(context.secrets_file))
-    topic = secrets.get(NTFY_TOPIC)
+    topic = secrets.get(ntfy_topic)
     if topic is not None:
         topic = topic.strip()
         if len(topic) > 0:
             return topic
 
     topic = generate_topic(context.ntfy_prefix)
-    secrets[NTFY_TOPIC] = topic
+    secrets[ntfy_topic] = topic
     save_env_file(secrets.items(), context.secrets_file)
     return topic
 
@@ -343,9 +342,9 @@ def notify_failure(
 
 
 def plist_label(context: Context, subcommand: str) -> str:
-    MAX_NAME_LEN = 255
+    max_name_len = 255
     rdn = f"{context.rdn}.{subcommand}"
-    return rdn[:MAX_NAME_LEN]
+    return rdn[:max_name_len]
 
 
 def plist_document(context: Context, job: Job) -> str:
@@ -395,13 +394,16 @@ def plist_document(context: Context, job: Job) -> str:
 
 
 def cmd_proxy(context: Context, args: list[str]):
+    restic = shutil.which("restic")
+    if restic is None:
+        raise ValueError("Cannot find restic in the PATH")
     lock_path = context.lock_file
     try:
         with lock_path.open(mode="wb") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
 
             subprocess.run(
-                [RESTIC, *args],
+                [restic, *args],
                 check=True,
                 env=build_restic_env(context),
             )
@@ -521,7 +523,7 @@ def cmd_install(context: Context, args: list[str]):
         path = destination / f"{label}.plist"
         xml_data = plist_document(context, job)
         with path.open(mode="wb") as f:
-            f.write(xml_data)
+            f.write(xml_data)  # type: ignore
 
 
 def main():
