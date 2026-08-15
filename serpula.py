@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 
+"""
+Wraps calls to restic for backup operations. The goal of this script is to send
+notifications using an "ntfy.sh"-compatible service in case of failures during
+backup operations.
+
+The script is designed for macOS. The `install` subcommand will install launchd
+plist jobs for backups, backup pruning, and restore testing. The schedules are
+currently hard-coded on install, but you can later edit the plist files to your
+needs. Secrets are stored in `~/Library/Application Support/net.nausicaea.serpula/secrets/env`.
+"""
+
 import abc
 import argparse
 import enum
