@@ -334,7 +334,7 @@ def get_ntfy_topic(context: Context) -> str:
         if len(topic) > 0:
             return topic
 
-    # BUGFIX: don't assume the secrets file already exists. notify_failure()
+    # BUGFIX: don't assume the secrets file already exists. notify()
     # calls this too, and it must not itself crash (masking the original
     # failure) just because `install`/ensure_secrets_scaffold() never ran.
     if context.secrets_file.exists():
@@ -353,13 +353,12 @@ def get_ntfy_topic(context: Context) -> str:
     return topic
 
 
-def notify_failure(
+def notify(
     context: Context,
     priority: Priority,
-    subcommand: str,
+    title: str,
     message: str,
 ) -> None:
-    title = f"serpula: restic {subcommand} failed on {context.host_name}"
     topic = get_ntfy_topic(context)
     client = http.client.HTTPSConnection(
         context.ntfy_server_fqdn,
@@ -461,8 +460,11 @@ def cmd_proxy(context: Context, args: list[str]) -> None:
                 env=build_restic_env(context),
             )
     except Exception as e:
-        notify_failure(context, Priority.DEFAULT, args[0], str(type(e)))
+        title = f"serpula: restic {args[0]} failed on {context.host_name}"
+        notify(context, Priority.HIGH, title, str(type(e)))
         raise
+    title = f"serpula: restic {args[0]} succeeded on {context.host_name}"
+    notify(context, Priority.DEFAULT, title, "")
 
 
 def cmd_install(context: Context, args: list[str]) -> None:
@@ -1034,14 +1036,13 @@ class TestNotifyFailure(unittest.TestCase):
                 "http.client.HTTPSConnection", return_value=mock_conn
             ) as mock_https,
         ):
-            notify_failure(self.ctx, Priority.HIGH, "backup", "boom")
+            notify(self.ctx, Priority.HIGH, "backup", "boom")
 
         mock_https.assert_called_once()
         args, kwargs = mock_conn.request.call_args
         self.assertEqual(args[0], "POST")
         self.assertEqual(args[1], "/my-topic")
         self.assertEqual(kwargs["headers"]["X-Priority"], Priority.HIGH.value)
-        self.assertIn("myhost", kwargs["headers"]["X-Title"])
         self.assertEqual(kwargs["body"], b"boom")
 
     def test_failure_status_raises(self) -> None:
@@ -1056,7 +1057,7 @@ class TestNotifyFailure(unittest.TestCase):
             mock.patch("http.client.HTTPSConnection", return_value=mock_conn),
         ):
             with self.assertRaises(http.client.HTTPException):
-                notify_failure(self.ctx, Priority.DEFAULT, "backup", "boom")
+                notify(self.ctx, Priority.DEFAULT, "backup", "boom")
 
 
 class TestPlistLabel(unittest.TestCase):
