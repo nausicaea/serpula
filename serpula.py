@@ -61,7 +61,7 @@ class Context:
         self.runtime_dir = self.home / "Library" / "Application Support" / RDN
         self.data_dir = self.runtime_dir
         self.cache_dir = self.home / "Library" / "Caches" / RDN
-        self.log_dir = self.cache_dir / "logs"
+        self.log_dir = self.home / "Library" / "Logs" / RDN
         self.lock_file = self.runtime_dir / "serpula.lock"
         self.secrets_file = self.data_dir / "secrets" / "env"
 
@@ -613,7 +613,7 @@ class TestContext(unittest.TestCase):
         self.assertEqual(self.ctx.cache_dir, Path(f"/home/Library/Caches/{RDN}"))
 
     def test_log_dir(self) -> None:
-        self.assertEqual(self.ctx.log_dir, Path(f"/home/Library/Caches/{RDN}/logs"))
+        self.assertEqual(self.ctx.log_dir, Path(f"/home/Library/Logs/{RDN}"))
 
     def test_lock_file(self) -> None:
         self.assertEqual(
