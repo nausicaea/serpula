@@ -24,4 +24,4 @@ jobs:
         python-version: 3.14.7
     - name: Run unit tests
       run: |
-        python3 -m unittest serpula
+        python3 -m unittest serpula -v
