@@ -24,11 +24,13 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections.abc import Generator, Iterable
 from dataclasses import dataclass, field
+from unittest import mock
 
 RDN: str = "net.nausicaea.serpula"
 
@@ -247,10 +249,26 @@ def load_env_file(path: Path) -> Generator[tuple[str, str], None, None]:
 
 
 def save_env_file(data: Iterable[tuple[str, str]], path: Path) -> None:
+    # BUGFIX: `path.parent` (e.g. ".../secrets/") is never created anywhere
+    # else in this script, so on a first-ever run this used to blow up with
+    # FileNotFoundError. Make this function self-sufficient instead of
+    # relying on callers to have created the directory already.
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open(mode="wt") as f:
         f.write(serialize_env_content(data))
     path.chmod(0o600)
     path.parent.chmod(0o700)
+
+
+def ensure_directories(context: Context) -> None:
+    """
+    Create the directories restic/launchd need that aren't already handled by
+    save_env_file(): the runtime dir (holds the lock file), the cache dir
+    (RESTIC_CACHE_DIR), and the log dir (launchd StandardOut/ErrorPath).
+    Safe to call repeatedly.
+    """
+    for directory in (context.runtime_dir, context.cache_dir, context.log_dir):
+        directory.mkdir(parents=True, exist_ok=True)
 
 
 def ensure_secrets_scaffold(context: Context) -> None:
@@ -262,8 +280,8 @@ def ensure_secrets_scaffold(context: Context) -> None:
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
     ]
-    secrets = {v: "" for v in variables}
-    save_env_file(secrets.items(), context.secrets_file)
+    env_vars = {v: "" for v in variables}
+    save_env_file(env_vars.items(), context.secrets_file)
 
 
 def build_restic_env(context: Context) -> dict[str, str]:
@@ -275,17 +293,26 @@ def build_restic_env(context: Context) -> dict[str, str]:
         "AWS_DEFAULT_REGION",
         "AWS_SESSION_TOKEN",
     }
-    secrets = dict(
+    env_vars = dict(
         filter(lambda e: e[0] in allowed, load_env_file(context.secrets_file))
     )
     required = ["RESTIC_REPOSITORY", "RESTIC_PASSWORD"]
     for r in required:
-        if r not in secrets:
+        # BUGFIX: previously only checked key *presence*. A freshly scaffolded
+        # secrets file has these keys present but empty, which used to pass
+        # this check and only fail later, opaquely, inside restic itself.
+        if r not in env_vars or len(env_vars[r]) == 0:
             raise ValueError(
                 f"Environment variable {r} must be set in {context.secrets_file}"
             )
-    secrets["RESTIC_CACHE_DIR"] = str(context.cache_dir)
-    return secrets
+    # BUGFIX: this used to return *only* the filtered secrets, replacing the
+    # subprocess environment entirely and dropping PATH, HOME, TMPDIR, LANG,
+    # etc. That can break restic backends (rclone/sftp/ssh helpers, temp
+    # file handling, ...) that rely on ambient environment variables.
+    env = dict(os.environ)
+    env.update(env_vars)
+    env["RESTIC_CACHE_DIR"] = str(context.cache_dir)
+    return env
 
 
 def generate_topic(prefix: str | None) -> str:
@@ -304,16 +331,22 @@ def get_ntfy_topic(context: Context) -> str:
         if len(topic) > 0:
             return topic
 
-    secrets = dict(load_env_file(context.secrets_file))
-    topic = secrets.get(ntfy_topic)
+    # BUGFIX: don't assume the secrets file already exists. notify_failure()
+    # calls this too, and it must not itself crash (masking the original
+    # failure) just because `install`/ensure_secrets_scaffold() never ran.
+    if context.secrets_file.exists():
+        env_vars = dict(load_env_file(context.secrets_file))
+    else:
+        env_vars = {}
+    topic = env_vars.get(ntfy_topic)
     if topic is not None:
         topic = topic.strip()
         if len(topic) > 0:
             return topic
 
     topic = generate_topic(context.ntfy_prefix)
-    secrets[ntfy_topic] = topic
-    save_env_file(secrets.items(), context.secrets_file)
+    env_vars[ntfy_topic] = topic
+    save_env_file(env_vars.items(), context.secrets_file)
     return topic
 
 
@@ -405,6 +438,9 @@ def cmd_proxy(context: Context, args: list[str]) -> None:
     restic = shutil.which("restic")
     if restic is None:
         raise ValueError("Cannot find restic in the PATH")
+    # BUGFIX: nothing used to create runtime_dir/cache_dir/log_dir, so the
+    # very first scheduled run (lock file, restic cache) would fail.
+    ensure_directories(context)
     lock_path = context.lock_file
     try:
         with lock_path.open(mode="wb") as f:
@@ -499,11 +535,19 @@ def cmd_install(context: Context, args: list[str]) -> None:
         help="The files and folders to include in the backup.",
     )
     namespace = parser.parse_args(args[1:])
-    destination: Path = namespace.destination.expanduser().resolve(strict=True)
+    # BUGFIX: ~/Library/LaunchAgents isn't guaranteed to exist on a fresh
+    # macOS user account (it's only created the first time something else
+    # installs an agent), so resolve(strict=True) used to blow up here too.
+    destination: Path = namespace.destination.expanduser()
+    destination.mkdir(parents=True, exist_ok=True)
+    destination = destination.resolve(strict=True)
     sources: list[Path] = [
         s.expanduser().resolve(strict=True) for s in namespace.source
     ]
-    context = Context.load()
+    # BUGFIX: this used to silently discard the `context` argument and
+    # reload a fresh one, which happened to be equivalent but was confusing
+    # and meant this function ignored context injected by its caller/tests.
+    ensure_directories(context)
     ensure_secrets_scaffold(context)
     get_ntfy_topic(context)
 
@@ -551,7 +595,7 @@ class TestContext(unittest.TestCase):
         self.assertEqual(self.ctx.ntfy_server_fqdn, "ntfy.sh")
 
     def test_default_ntfy_prefix(self) -> None:
-        self.assertTrue(self.ctx.ntfy_prefix is None)
+        self.assertIsNone(self.ctx.ntfy_prefix)
 
     def test_data_dir(self) -> None:
         self.assertEqual(
@@ -730,7 +774,7 @@ class TestParseVarAssignment(unittest.TestCase):
             self.assertEqual(parse_var_assignment(orig), expected)
 
     def test_expected_failures(self) -> None:
-        self.assertTrue(parse_var_assignment("   A ") is None)
+        self.assertIsNone(parse_var_assignment("   A "))
 
 
 class TestParseEnvContent(unittest.TestCase):
@@ -746,15 +790,463 @@ class TestParseEnvContent(unittest.TestCase):
         )
 
         self.assertEqual(len(m), 1)
-        self.assertTrue("A" in m)
+        self.assertIn("A", m)
         self.assertEqual(m["A"], "B")
+
+    def test_blank_lines_are_skipped(self) -> None:
+        m = dict(parse_env_content(["", "   ", "A=B", "\t"]))
+        self.assertEqual(m, {"A": "B"})
+
+    def test_invalid_line_raises_with_1_indexed_line_number(self) -> None:
+        with self.assertRaisesRegex(ValueError, "line 2"):
+            list(parse_env_content(["A=B", "not-an-assignment"]))
+
+
+class TestSerializeEnvContent(unittest.TestCase):
+    def test_basic(self) -> None:
+        self.assertEqual(
+            serialize_env_content([("A", "1"), ("B", "two words")]),
+            "A=1\nB=two words",
+        )
+
+    def test_empty(self) -> None:
+        self.assertEqual(serialize_env_content([]), "")
+
+    def test_round_trips_with_parse_env_content(self) -> None:
+        data = [("A", "1"), ("B", "2")]
+        text = serialize_env_content(data)
+        self.assertEqual(list(parse_env_content(text.splitlines())), data)
+
+
+class TestSaveLoadEnvFile(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        # Nested, not-yet-existing directory: exercises the mkdir fix.
+        self.path = Path(self.tmp.name) / "nested" / "secrets" / "env"
+
+    def test_round_trip(self) -> None:
+        data = [("A", "1"), ("B", "two words"), ("C", "")]
+        save_env_file(data, self.path)
+        self.assertEqual(list(load_env_file(self.path)), data)
+
+    def test_creates_missing_parent_directories(self) -> None:
+        self.assertFalse(self.path.parent.exists())
+        save_env_file([("A", "1")], self.path)
+        self.assertTrue(self.path.exists())
+
+    def test_sets_restrictive_permissions(self) -> None:
+        save_env_file([("A", "1")], self.path)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.path.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_overwrites_existing_file(self) -> None:
+        save_env_file([("A", "1")], self.path)
+        save_env_file([("A", "2"), ("B", "3")], self.path)
+        self.assertEqual(list(load_env_file(self.path)), [("A", "2"), ("B", "3")])
+
+
+class TestEnsureDirectories(unittest.TestCase):
+    def test_creates_expected_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = Context(home=Path(tmp), host_name="h", script=Path("/x/s"))
+            self.assertFalse(ctx.runtime_dir.exists())
+            ensure_directories(ctx)
+            self.assertTrue(ctx.runtime_dir.is_dir())
+            self.assertTrue(ctx.cache_dir.is_dir())
+            self.assertTrue(ctx.log_dir.is_dir())
+
+    def test_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = Context(home=Path(tmp), host_name="h", script=Path("/x/s"))
+            ensure_directories(ctx)
+            ensure_directories(ctx)
+            self.assertTrue(ctx.log_dir.is_dir())
+
+
+class TestEnsureSecretsScaffold(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Context(home=Path(self.tmp.name), host_name="h", script=Path("/x/s"))
+
+    def test_creates_scaffold_with_expected_keys(self) -> None:  # trufflehog:ignore
+        ensure_secrets_scaffold(self.ctx)
+        data = dict(load_env_file(self.ctx.secrets_file))
+        self.assertEqual(
+            set(data.keys()),
+            {
+                "RESTIC_REPOSITORY",
+                "RESTIC_PASSWORD",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+            },
+        )
+        self.assertTrue(all(v == "" for v in data.values()))
+
+    def test_does_not_overwrite_existing_file(self) -> None:
+        save_env_file([("RESTIC_REPOSITORY", "s3:bucket")], self.ctx.secrets_file)
+        ensure_secrets_scaffold(self.ctx)
+        data = dict(load_env_file(self.ctx.secrets_file))
+        self.assertEqual(data, {"RESTIC_REPOSITORY": "s3:bucket"})
+
+
+class TestBuildResticEnv(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Context(home=Path(self.tmp.name), host_name="h", script=Path("/x/s"))
+
+    def test_missing_required_var_raises(self) -> None:
+        save_env_file([("RESTIC_REPOSITORY", "s3:bucket")], self.ctx.secrets_file)
+        with self.assertRaises(ValueError):
+            build_restic_env(self.ctx)
+
+    def test_empty_required_var_raises(self) -> None:
+        save_env_file(
+            [("RESTIC_REPOSITORY", ""), ("RESTIC_PASSWORD", "hunter2")],
+            self.ctx.secrets_file,
+        )
+        with self.assertRaises(ValueError):
+            build_restic_env(self.ctx)
+
+    def test_filters_disallowed_vars_and_sets_cache_dir(self) -> None:
+        save_env_file(
+            [
+                ("RESTIC_REPOSITORY", "s3:bucket"),
+                ("RESTIC_PASSWORD", "hunter2"),
+                ("SOME_UNRELATED_VAR", "nope"),
+            ],
+            self.ctx.secrets_file,
+        )
+        env = build_restic_env(self.ctx)
+        self.assertNotIn("SOME_UNRELATED_VAR", env)
+        self.assertEqual(env["RESTIC_CACHE_DIR"], str(self.ctx.cache_dir))
+
+    def test_preserves_ambient_environment(self) -> None:
+        save_env_file(
+            [("RESTIC_REPOSITORY", "s3:bucket"), ("RESTIC_PASSWORD", "hunter2")],
+            self.ctx.secrets_file,
+        )
+        with mock.patch.dict(os.environ, {"PATH": "/custom/bin"}):
+            env = build_restic_env(self.ctx)
+        self.assertEqual(env["PATH"], "/custom/bin")
+
+    def test_secrets_override_ambient_environment(self) -> None:
+        save_env_file(
+            [
+                ("RESTIC_REPOSITORY", "s3:bucket"),
+                ("RESTIC_PASSWORD", "hunter2"),
+                ("AWS_ACCESS_KEY_ID", "from-file"),
+            ],
+            self.ctx.secrets_file,
+        )
+        with mock.patch.dict(os.environ, {"AWS_ACCESS_KEY_ID": "ambient"}):
+            env = build_restic_env(self.ctx)
+        self.assertEqual(env["AWS_ACCESS_KEY_ID"], "from-file")
+
+
+class TestGenerateTopic(unittest.TestCase):
+    def test_without_prefix_is_48_hex_chars(self) -> None:
+        topic = generate_topic(None)
+        self.assertEqual(len(topic), 48)
+        bytes.fromhex(topic)
+
+    def test_with_prefix(self) -> None:
+        topic = generate_topic("myprefix")
+        self.assertTrue(topic.startswith("myprefix-"))
+        suffix = topic[len("myprefix-") :]
+        self.assertEqual(len(suffix), 48)
+        bytes.fromhex(suffix)
+
+
+class TestGetNtfyTopic(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Context(home=Path(self.tmp.name), host_name="h", script=Path("/x/s"))
+
+    def test_environment_variable_takes_precedence(self) -> None:
+        save_env_file([("NTFY_TOPIC", "from-file")], self.ctx.secrets_file)
+        with mock.patch.dict(os.environ, {"NTFY_TOPIC": "from-env"}):
+            self.assertEqual(get_ntfy_topic(self.ctx), "from-env")
+
+    def test_falls_back_to_secrets_file(self) -> None:
+        save_env_file([("NTFY_TOPIC", "from-file")], self.ctx.secrets_file)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NTFY_TOPIC", None)
+            self.assertEqual(get_ntfy_topic(self.ctx), "from-file")
+
+    def test_generates_and_persists_when_absent(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NTFY_TOPIC", None)
+            topic = get_ntfy_topic(self.ctx)
+        self.assertEqual(len(topic), 48)
+        persisted = dict(load_env_file(self.ctx.secrets_file))
+        self.assertEqual(persisted["NTFY_TOPIC"], topic)
+
+    def test_works_when_secrets_file_does_not_exist_yet(self) -> None:
+        self.assertFalse(self.ctx.secrets_file.exists())
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NTFY_TOPIC", None)
+            topic = get_ntfy_topic(self.ctx)
+        self.assertEqual(len(topic), 48)
+        self.assertTrue(self.ctx.secrets_file.exists())
+
+    def test_preserves_existing_secrets_when_generating(self) -> None:
+        save_env_file([("RESTIC_REPOSITORY", "s3:bucket")], self.ctx.secrets_file)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NTFY_TOPIC", None)
+            get_ntfy_topic(self.ctx)
+        persisted = dict(load_env_file(self.ctx.secrets_file))
+        self.assertEqual(persisted["RESTIC_REPOSITORY"], "s3:bucket")
+        self.assertIn("NTFY_TOPIC", persisted)
+
+
+class TestNotifyFailure(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Context(
+            home=Path(self.tmp.name), host_name="myhost", script=Path("/x/s")
+        )
+
+    def test_success_path_posts_expected_request(self) -> None:  # trufflehog:ignore
+        mock_response = mock.Mock()
+        mock_response.status = 200
+        mock_conn = mock.Mock()
+        mock_conn.getresponse.return_value = mock_response
+
+        with (
+            mock.patch.dict(os.environ, {"NTFY_TOPIC": "my-topic"}),
+            mock.patch(
+                "http.client.HTTPSConnection", return_value=mock_conn
+            ) as mock_https,
+        ):
+            notify_failure(self.ctx, Priority.HIGH, "backup", "boom")
+
+        mock_https.assert_called_once()
+        args, kwargs = mock_conn.request.call_args
+        self.assertEqual(args[0], http.HTTPMethod.POST)
+        self.assertEqual(args[1], "/my-topic")
+        self.assertEqual(kwargs["headers"]["X-Priority"], Priority.HIGH.value)
+        self.assertIn("myhost", kwargs["headers"]["X-Title"])
+        self.assertEqual(kwargs["body"], b"boom")
+
+    def test_failure_status_raises(self) -> None:
+        mock_response = mock.Mock()
+        mock_response.status = 500
+        mock_response.read.return_value = b"server error"
+        mock_conn = mock.Mock()
+        mock_conn.getresponse.return_value = mock_response
+
+        with (
+            mock.patch.dict(os.environ, {"NTFY_TOPIC": "my-topic"}),
+            mock.patch("http.client.HTTPSConnection", return_value=mock_conn),
+        ):
+            with self.assertRaises(http.client.HTTPException):
+                notify_failure(self.ctx, Priority.DEFAULT, "backup", "boom")
+
+
+class TestPlistLabel(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ctx = Context(home=Path("/home"), host_name="h", script=Path("/x/s"))
+
+    def test_normal_subcommand(self) -> None:
+        self.assertEqual(
+            plist_label(self.ctx, "backup"), "net.nausicaea.serpula.backup"
+        )
+
+    def test_truncates_to_255_chars(self) -> None:
+        long_subcommand = "x" * 300
+        label = plist_label(self.ctx, long_subcommand)
+        self.assertEqual(len(label), 255)
+        self.assertTrue(label.startswith(f"{RDN}."))
+
+
+class TestPlistDocument(unittest.TestCase):
+    def _plist_dict_pairs(self, document: bytes) -> dict[str, ET.Element]:
+        root = ET.fromstring(document)
+        d = root.find("dict")
+        self.assertIsNotNone(d)
+        children = list(d)  # type: ignore
+        return dict(
+            zip((c.text for c in children[0::2] if c is not None), children[1::2])  # type: ignore
+        )
+
+    def setUp(self) -> None:
+        self.ctx = Context(
+            home=Path("/home/tester"),
+            host_name="myhost",
+            script=Path("/usr/local/bin/serpula.py"),
+        )
+
+    def test_header_and_root(self) -> None:
+        job = Check(Calendar(None, 2, 0), "5%")
+        doc = plist_document(self.ctx, job)
+        self.assertTrue(doc.startswith(b'<?xml version="1.0" encoding="UTF-8"?>'))
+        self.assertIn(b"<!DOCTYPE plist PUBLIC", doc)
+        root = ET.fromstring(doc)
+        self.assertEqual(root.tag, "plist")
+        self.assertEqual(root.get("version"), "1.0")
+
+    def test_backup_job_program_arguments_and_paths(self) -> None:
+        job = Backup(Interval(3600), ["tag1", "tag2"], True, ["*.tmp"], [Path("/data")])
+        doc = plist_document(self.ctx, job)
+        pairs = self._plist_dict_pairs(doc)
+
+        self.assertEqual(pairs["Label"].text, "net.nausicaea.serpula.backup")
+
+        program_args = [s.text for s in pairs["ProgramArguments"]]
+        self.assertEqual(
+            program_args,
+            [
+                str(self.ctx.script),
+                "backup",
+                "-t=tag1,tag2",
+                "--exclude-caches",
+                "-e=*.tmp",
+                "/data",
+            ],
+        )
+
+        self.assertEqual(pairs["StartInterval"].text, "3600")
+        self.assertEqual(
+            pairs["StandardOutPath"].text, str(self.ctx.log_dir / "backup.stdout.log")
+        )
+        self.assertEqual(
+            pairs["StandardErrorPath"].text, str(self.ctx.log_dir / "backup.stderr.log")
+        )
+        self.assertEqual(pairs["ProcessType"].text, "Background")
+        self.assertEqual(pairs["RunAtLoad"].tag, "false")
+        self.assertEqual(pairs["LowPriorityIO"].tag, "true")
+
+    def test_check_job_uses_calendar_schedule(self) -> None:
+        job = Check(Calendar(None, 2, 30), "10%")
+        doc = plist_document(self.ctx, job)
+        pairs = self._plist_dict_pairs(doc)
+        schedule_dict = pairs["StartCalendarInterval"]
+        self.assertEqual(schedule_dict.tag, "dict")
+        texts = [c.text for c in schedule_dict]
+        self.assertEqual(texts, ["Hour", "2", "Minute", "30"])
+
+
+class TestCmdProxy(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Context(home=Path(self.tmp.name), host_name="h", script=Path("/x/s"))
+        save_env_file(
+            [("RESTIC_REPOSITORY", "s3:bucket"), ("RESTIC_PASSWORD", "hunter2")],
+            self.ctx.secrets_file,
+        )
+
+    def test_creates_directories_and_invokes_restic(self) -> None:
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/restic"),
+            mock.patch("subprocess.run") as mock_run,
+        ):
+            cmd_proxy(self.ctx, ["backup", "/data"])
+
+        self.assertTrue(self.ctx.runtime_dir.is_dir())
+        self.assertTrue(self.ctx.cache_dir.is_dir())
+        mock_run.assert_called_once()
+        call_args, call_kwargs = mock_run.call_args
+        self.assertEqual(call_args[0], ["/usr/bin/restic", "backup", "/data"])
+        self.assertTrue(call_kwargs["check"])
+        self.assertEqual(call_kwargs["env"]["RESTIC_REPOSITORY"], "s3:bucket")
+
+    def test_missing_restic_raises_without_notifying(self) -> None:
+        with (
+            mock.patch("shutil.which", return_value=None),
+            mock.patch(f"{__name__}.notify_failure") as mock_notify,
+        ):
+            with self.assertRaises(ValueError):
+                cmd_proxy(self.ctx, ["backup"])
+        mock_notify.assert_not_called()
+
+    def test_subprocess_failure_notifies_and_reraises(self) -> None:
+        error = subprocess.CalledProcessError(1, ["restic", "backup"])
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/restic"),
+            mock.patch("subprocess.run", side_effect=error),
+            mock.patch(f"{__name__}.notify_failure") as mock_notify,
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                cmd_proxy(self.ctx, ["backup", "/data"])
+        mock_notify.assert_called_once()
+        call_args, _ = mock_notify.call_args
+        self.assertEqual(call_args[0], self.ctx)
+        self.assertEqual(call_args[1], Priority.DEFAULT)
+        self.assertEqual(call_args[2], "backup")
+
+
+class TestCmdInstall(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / "home"
+        self.home.mkdir()
+        self.source = Path(self.tmp.name) / "data"
+        self.source.mkdir()
+        self.ctx = Context(
+            home=self.home, host_name="myhost", script=Path("/usr/local/bin/serpula.py")
+        )
+
+    def test_creates_destination_and_writes_plists(self) -> None:
+        # Regression test: ~/Library/LaunchAgents doesn't necessarily exist
+        # ahead of time on a fresh macOS account.
+        destination = self.home / "LaunchAgents"
+        self.assertFalse(destination.exists())
+        cmd_install(self.ctx, ["install", "-D", str(destination), str(self.source)])
+        self.assertTrue(destination.is_dir())
+        written = sorted(p.name for p in destination.glob("*.plist"))
+        self.assertEqual(
+            written,
+            [f"{RDN}.backup.plist", f"{RDN}.check.plist", f"{RDN}.forget.plist"],
+        )
+
+    def test_scaffolds_secrets_and_ntfy_topic(self) -> None:
+        destination = self.home / "LaunchAgents"
+        cmd_install(self.ctx, ["install", "-D", str(destination), str(self.source)])
+        data = dict(load_env_file(self.ctx.secrets_file))
+        self.assertIn("RESTIC_REPOSITORY", data)
+        self.assertIn("NTFY_TOPIC", data)
+
+
+class TestMainDispatch(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ctx = Context(home=Path("/tmp"), host_name="h", script=Path("/tmp/s"))
+
+    def test_dispatches_to_install_subcommand(self) -> None:
+        with (
+            mock.patch.object(sys, "argv", ["serpula.py", "install", "/tmp"]),
+            mock.patch(f"{__name__}.Context.load", return_value=self.ctx),
+            mock.patch(f"{__name__}.cmd_install") as mock_install,
+        ):
+            main()
+        mock_install.assert_called_once_with(self.ctx, ["install", "/tmp"])
+
+    def test_dispatches_to_proxy_for_other_subcommands(self) -> None:
+        with (
+            mock.patch.object(sys, "argv", ["serpula.py", "backup"]),
+            mock.patch(f"{__name__}.Context.load", return_value=self.ctx),
+            mock.patch(f"{__name__}.cmd_proxy") as mock_proxy,
+        ):
+            main()
+        mock_proxy.assert_called_once_with(self.ctx, ["backup"])
 
 
 def test() -> None:
     """
-    Run unit and documentation tests.
+    Run unit tests.
+
+    You are expected to invoke the tests with
+
+    ```
+    python3 -c 'import serpula; serpula.test()'
+    ```
     """
-    print("Running unit tests")
     unittest.main(module=__name__, exit=False)
 
 
