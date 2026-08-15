@@ -11,6 +11,8 @@ currently hard-coded on install, but you can later edit the plist files to your
 needs. Secrets are stored in `~/Library/Application Support/net.nausicaea.serpula/secrets/env`.
 """
 
+from __future__ import annotations
+
 import abc
 import argparse
 import enum
@@ -363,7 +365,7 @@ def notify_failure(
         context=ssl.create_default_context(),
     )
     client.request(
-        http.HTTPMethod.POST,
+        "POST",
         f"/{topic}",
         headers={
             "Host": context.ntfy_server_fqdn,
@@ -375,7 +377,7 @@ def notify_failure(
     )
     response = client.getresponse()
     status = http.HTTPStatus(response.status)
-    if not status.is_success:
+    if not (200 <= status < 300):
         data = response.read()
         raise http.client.HTTPException(
             f"HTTP {status} {status.phrase} ({status.description}): {data!r}"
@@ -1027,7 +1029,7 @@ class TestNotifyFailure(unittest.TestCase):
 
         mock_https.assert_called_once()
         args, kwargs = mock_conn.request.call_args
-        self.assertEqual(args[0], http.HTTPMethod.POST)
+        self.assertEqual(args[0], "POST")
         self.assertEqual(args[1], "/my-topic")
         self.assertEqual(kwargs["headers"]["X-Priority"], Priority.HIGH.value)
         self.assertIn("myhost", kwargs["headers"]["X-Title"])
@@ -1259,11 +1261,10 @@ def main() -> None:
     context = Context.load()
 
     subcommand = args[1].lower()
-    match subcommand:
-        case "install":
-            cmd_install(context, args[1:])
-        case _:
-            cmd_proxy(context, args[1:])
+    if subcommand == "install":
+        cmd_install(context, args[1:])
+    else:
+        cmd_proxy(context, args[1:])
 
 
 if __name__ == "__main__":
