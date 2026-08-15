@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from unittest import mock
 
 RDN: str = "net.nausicaea.serpula"
+RESTIC: str | None = shutil.which("restic")
 
 
 @dataclass
@@ -428,6 +429,13 @@ def plist_document(context: Context, job: Job) -> bytes:
     low_prio_io_key = ET.SubElement(plist_dict, "key")
     low_prio_io_key.text = "LowPriorityIO"
     ET.SubElement(plist_dict, "true")
+    environment_variables_key = ET.SubElement(plist_dict, "key")
+    environment_variables_key.text = "EnvironmentVariables"
+    environment_variables_value = ET.SubElement(plist_dict, "dict")
+    path_key = ET.SubElement(environment_variables_value, "key")
+    path_key.text = "PATH"
+    path_value = ET.SubElement(environment_variables_value, "string")
+    path_value.text = str(Path(RESTIC).parent) if RESTIC is not None else ""
 
     content: bytes = ET.tostring(plist, encoding="utf-8", xml_declaration=False)
     header = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -437,8 +445,7 @@ def plist_document(context: Context, job: Job) -> bytes:
 
 
 def cmd_proxy(context: Context, args: list[str]) -> None:
-    restic = shutil.which("restic")
-    if restic is None:
+    if RESTIC is None:
         raise ValueError("Cannot find restic in the PATH")
     # BUGFIX: nothing used to create runtime_dir/cache_dir/log_dir, so the
     # very first scheduled run (lock file, restic cache) would fail.
@@ -449,7 +456,7 @@ def cmd_proxy(context: Context, args: list[str]) -> None:
             fcntl.flock(f, fcntl.LOCK_EX)
 
             subprocess.run(
-                [restic, *args],
+                [RESTIC, *args],
                 check=True,
                 env=build_restic_env(context),
             )
@@ -537,6 +544,8 @@ def cmd_install(context: Context, args: list[str]) -> None:
         help="The files and folders to include in the backup.",
     )
     namespace = parser.parse_args(args[1:])
+    if RESTIC is None:
+        raise ValueError("Cannot find restic in the PATH")
     # BUGFIX: ~/Library/LaunchAgents isn't guaranteed to exist on a fresh
     # macOS user account (it's only created the first time something else
     # installs an agent), so resolve(strict=True) used to blow up here too.
