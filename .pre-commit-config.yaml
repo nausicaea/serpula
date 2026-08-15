@@ -55,3 +55,13 @@ repos:
     rev: v4.17.0
     hooks:
       - id: commitizen
+
+  - repo: local
+    hooks:
+      - id: serpula-tests
+        name: Run serpula unit tests
+        stages: [pre-push]
+        entry: python3 -m unittest serpula
+        language: system
+        pass_filenames: false
+        files: ^serpula\.py$
