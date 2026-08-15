@@ -2,5 +2,5 @@ fileignoreconfig:
 - filename: .github/workflows/ci.yml
   checksum: 6213f8398c267c76fb0e1865f081bd5a338d6da97d2a1fd1f4e3bab822722b3c
 - filename: serpula.py
-  checksum: 02cecc05c0987e635b952d5758e63d9993d3b77120ac8bce9173dc05e8080d62
+  checksum: ca4a8287fe3cfd55ef69029ec1dbb90de1527faf0818f9b5ccb5f06ed908bb64
 version: "1.0"

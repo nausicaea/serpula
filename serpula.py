@@ -2,7 +2,6 @@
 
 import abc
 import argparse
-import dataclasses
 import enum
 import fcntl
 import http
@@ -14,50 +13,44 @@ import socket
 import ssl
 import subprocess
 import sys
+import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections.abc import Generator, Iterable
+from dataclasses import dataclass, field
+
+RDN: str = "net.nausicaea.serpula"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass
 class Context:
-    rdn: str
     home: Path
-    runtime_dir: Path
-    data_dir: Path
-    cache_dir: Path
-    log_dir: Path
-    ntfy_server_fqdn: str
-    ntfy_prefix: str | None
     host_name: str
     script: Path
+    runtime_dir: Path = field(init=False)
+    data_dir: Path = field(init=False)
+    cache_dir: Path = field(init=False)
+    log_dir: Path = field(init=False)
+    lock_file: Path = field(init=False)
+    secrets_file: Path = field(init=False)
+    ntfy_server_fqdn: str = field(default="ntfy.sh")
+    ntfy_prefix: str | None = field(default=None)
 
     @classmethod
     def load(cls) -> "Context":
-        rdn = "net.nausicaea.serpula"
-        home = Path.home()
-        data_dir = home / "Library" / "Application Support" / rdn
-        cache_dir = home / "Library" / "Caches" / rdn
         return cls(
-            rdn=rdn,
-            home=home,
-            data_dir=data_dir,
-            runtime_dir=data_dir,
-            cache_dir=cache_dir,
-            log_dir=cache_dir / "logs",
-            ntfy_server_fqdn="ntfy.sh",
-            ntfy_prefix=None,
+            home=Path.home(),
             host_name=socket.gethostname(),
             script=Path(__file__).resolve(strict=True),
         )
 
-    @property
-    def lock_file(self) -> Path:
-        return self.runtime_dir / "serpula.lock"
-
-    @property
-    def secrets_file(self) -> Path:
-        return self.data_dir / "secrets" / "env"
+    def __post_init__(self) -> None:
+        self.runtime_dir = self.home / "Library" / "Application Support" / RDN
+        self.data_dir = self.runtime_dir
+        self.cache_dir = self.home / "Library" / "Caches" / RDN
+        self.log_dir = self.cache_dir / "logs"
+        self.lock_file = self.runtime_dir / "serpula.lock"
+        self.secrets_file = self.data_dir / "secrets" / "env"
 
 
 class Schedule(abc.ABC):
@@ -330,7 +323,7 @@ def notify_failure(
             "Host": context.ntfy_server_fqdn,
             "Content-Type": "text/plain; charset=utf-8",
             "X-Title": title,
-            "X-Priority": priority.name,
+            "X-Priority": priority.value,
         },
         body=message.encode("utf-8"),
     )
@@ -345,7 +338,7 @@ def notify_failure(
 
 def plist_label(context: Context, subcommand: str) -> str:
     max_name_len = 255
-    rdn = f"{context.rdn}.{subcommand}"
+    rdn = f"{RDN}.{subcommand}"
     return rdn[:max_name_len]
 
 
@@ -526,6 +519,236 @@ def cmd_install(context: Context, args: list[str]) -> None:
         xml_data = plist_document(context, job)
         with path.open(mode="wb") as f:
             f.write(xml_data)
+
+
+class TestGlobals(unittest.TestCase):
+    def test_rdn(self) -> None:
+        self.assertEqual(RDN, "net.nausicaea.serpula")
+
+
+class TestContext(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ctx = Context(
+            home=Path("/home"),
+            host_name="localhost",
+            script=Path("/x/bin/script"),
+        )
+
+    def test_default_ntfy_server_fqdn(self) -> None:
+        self.assertEqual(self.ctx.ntfy_server_fqdn, "ntfy.sh")
+
+    def test_default_ntfy_prefix(self) -> None:
+        self.assertTrue(self.ctx.ntfy_prefix is None)
+
+    def test_data_dir(self) -> None:
+        self.assertEqual(
+            self.ctx.data_dir,
+            Path("/home/Library/Application Support/net.nausicaea.serpula"),
+        )
+
+    def test_runtime_dir(self) -> None:
+        self.assertEqual(
+            self.ctx.runtime_dir,
+            Path("/home/Library/Application Support/net.nausicaea.serpula"),
+        )
+
+    def test_cache_dir(self) -> None:
+        self.assertEqual(
+            self.ctx.cache_dir, Path("/home/Library/Caches/net.nausicaea.serpula")
+        )
+
+    def test_log_dir(self) -> None:
+        self.assertEqual(
+            self.ctx.log_dir, Path("/home/Library/Caches/net.nausicaea.serpula/logs")
+        )
+
+    def test_lock_file(self) -> None:
+        self.assertEqual(
+            self.ctx.lock_file,
+            Path(
+                "/home/Library/Application Support/net.nausicaea.serpula/serpula.lock"
+            ),
+        )
+
+    def test_secrets_file(self) -> None:
+        self.assertEqual(
+            self.ctx.secrets_file,
+            Path("/home/Library/Application Support/net.nausicaea.serpula/secrets/env"),
+        )
+
+
+class TestContextSpecial(unittest.TestCase):
+    def test_load_side_effects(self) -> None:
+        ctx = Context.load()
+        self.assertEqual(ctx.home, Path.home())
+        self.assertEqual(ctx.host_name, socket.gethostname())
+        self.assertEqual(ctx.script, Path(__file__).resolve(strict=True))
+
+
+class TestSchedule(unittest.TestCase):
+    def test_interval_build_xml(self) -> None:
+        e = ET.Element("test")
+        Interval(60).build_xml(e)
+
+        children = list(e)
+        self.assertEqual(len(children), 2)
+
+        key, value = children
+        self.assertEqual(key.tag, "key")
+        self.assertEqual(key.text, "StartInterval")
+        self.assertEqual(value.tag, "integer")
+        self.assertEqual(value.text, "60")
+
+    def test_calendar_build_xml(self) -> None:
+        e = ET.Element("test")
+        Calendar(1, 2, 3).build_xml(e)
+
+        key, value = list(e)
+        self.assertEqual(key.text, "StartCalendarInterval")
+        self.assertEqual(value.tag, "dict")
+
+        # value should contain Weekday, Hour, Minute key/value pairs
+        grandchildren = list(value)
+        texts = [c.text for c in grandchildren]
+        self.assertEqual(
+            texts,
+            ["Weekday", "1", "Hour", "2", "Minute", "3"],
+        )
+
+        e = ET.Element("test")
+        Calendar(None, 2, 3).build_xml(e)
+
+        key, value = list(e)
+        self.assertEqual(key.text, "StartCalendarInterval")
+        self.assertEqual(value.tag, "dict")
+
+        # value should contain Weekday, Hour, Minute key/value pairs
+        grandchildren = list(value)
+        texts = [c.text for c in grandchildren]
+        self.assertEqual(
+            texts,
+            ["Hour", "2", "Minute", "3"],
+        )
+
+
+class TestJob(unittest.TestCase):
+    def test_backup_subcommand(self) -> None:
+        j = Backup(Interval(60), [], False, [], [])
+        self.assertEqual(j.subcommand(), "backup")
+
+    def test_backup_schedule(self) -> None:
+        s = Interval(60)
+        j = Backup(s, [], False, [], [])
+        self.assertEqual(j.schedule(), s)
+
+    def test_backup_args(self) -> None:
+        j = Backup(
+            Interval(60), ["a,b", "c"], False, ["A", "B"], [Path("X"), Path("Y")]
+        )
+        self.assertEqual(
+            j.args(),
+            [
+                "backup",
+                "-t=a,b,c",
+                "-e=A",
+                "-e=B",
+                "X",
+                "Y",
+            ],
+        )
+
+    def test_forget_subcommand(self) -> None:
+        j = Forget(Interval(60), 1, 2, 3, 4, 5)
+        self.assertEqual(j.subcommand(), "forget")
+
+    def test_forget_schedule(self) -> None:
+        s = Interval(60)
+        j = Forget(s, 1, 2, 3, 4, 5)
+        self.assertEqual(j.schedule(), s)
+
+    def test_forget_args(self) -> None:
+        j = Forget(Interval(60), 1, 2, 3, 4, 5)
+        self.assertEqual(
+            j.args(),
+            [
+                "forget",
+                "--prune",
+                "--keep-hourly=1",
+                "--keep-daily=2",
+                "--keep-weekly=3",
+                "--keep-monthly=4",
+                "--keep-yearly=5",
+            ],
+        )
+
+    def test_check_subcommand(self) -> None:
+        j = Check(Interval(60), "30%")
+        self.assertEqual(j.subcommand(), "check")
+
+    def test_check_schedule(self) -> None:
+        s = Interval(60)
+        j = Check(s, "30%")
+        self.assertEqual(j.schedule(), s)
+
+    def test_check_args(self) -> None:
+        j = Check(Interval(60), "30%")
+        self.assertEqual(
+            j.args(),
+            [
+                "check",
+                "--read-data-subset=30%",
+            ],
+        )
+
+
+class TestPriority(unittest.TestCase):
+    def test_values(self) -> None:
+        self.assertEqual(Priority.MAX.value, 5)
+        self.assertEqual(Priority.HIGH.value, 4)
+        self.assertEqual(Priority.DEFAULT.value, 3)
+        self.assertEqual(Priority.LOW.value, 2)
+        self.assertEqual(Priority.MIN.value, 1)
+
+
+class TestParseVarAssignment(unittest.TestCase):
+    def test_happy_path(self) -> None:
+        valid = [
+            ("A=", ("A", "")),
+            (" A  =   ", ("A", "")),
+            ("A=B", ("A", "B")),
+            (" A = B ", ("A", "B")),
+            (" A = B = C", ("A", "B = C")),
+        ]
+        for orig, expected in valid:
+            self.assertEqual(parse_var_assignment(orig), expected)
+
+    def test_expected_failures(self) -> None:
+        self.assertTrue(parse_var_assignment("   A ") is None)
+
+
+class TestParseEnvContent(unittest.TestCase):
+    def test_happy_path(self) -> None:
+        m = dict(
+            parse_env_content(
+                [
+                    "# This is a comment",
+                    "   # This too is a comment",
+                    "A = B",
+                ]
+            )
+        )
+
+        self.assertEqual(len(m), 1)
+        self.assertTrue("A" in m)
+        self.assertEqual(m["A"], "B")
+
+
+def test() -> None:
+    """
+    Run unit and documentation tests.
+    """
+    print("Running unit tests")
+    unittest.main(module=__name__, exit=False)
 
 
 def main() -> None:
