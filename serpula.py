@@ -461,7 +461,7 @@ def cmd_proxy(context: Context, args: list[str]) -> None:
                 env=build_restic_env(context),
             )
     except Exception as e:
-        notify_failure(context, Priority.DEFAULT, args[0], str(e))
+        notify_failure(context, Priority.DEFAULT, args[0], str(type(e)))
         raise
 
 
