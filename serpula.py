@@ -144,7 +144,7 @@ class Backup(Job):
         return self._schedule
 
     def args(self) -> list[str]:
-        a = [self.subcommand()]
+        a = [self.subcommand(), "--json"]
         if len(self._tags) > 0:
             a.append(f"--tag={','.join(self._tags)}")
         if self._exclude_caches:
@@ -183,6 +183,7 @@ class Forget(Job):
     def args(self) -> list[str]:
         return [
             self.subcommand(),
+            "--json",
             "--prune",
             f"--keep-hourly={self._keep_hourly}",
             f"--keep-daily={self._keep_daily}",
@@ -207,6 +208,7 @@ class Check(Job):
     def args(self) -> list[str]:
         return [
             self.subcommand(),
+            "--json",
             f"--read-data-subset={self._read_data_subset}",
         ]
 
@@ -713,6 +715,7 @@ class TestJob(unittest.TestCase):
             j.args(),
             [
                 "backup",
+                "--json",
                 "--tag=a,b,c",
                 "--exclude=A",
                 "--exclude=B",
@@ -736,6 +739,7 @@ class TestJob(unittest.TestCase):
             j.args(),
             [
                 "forget",
+                "--json",
                 "--prune",
                 "--keep-hourly=1",
                 "--keep-daily=2",
@@ -760,6 +764,7 @@ class TestJob(unittest.TestCase):
             j.args(),
             [
                 "check",
+                "--json",
                 "--read-data-subset=30%",
             ],
         )
