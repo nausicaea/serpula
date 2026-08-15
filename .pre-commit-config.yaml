@@ -25,20 +25,6 @@ repos:
       - id: check-vcs-permalinks
       - id: forbid-submodules
 
-  - repo: https://rosa.radicle.network/z2u7x2qgAhLqCFcMiy5CBGfZem19f.git
-    rev: fe6054596a86345201c2c104925ca5d33e21e987
-    hooks:
-      - id: cargo-fmt-check
-      - id: cargo-check
-      - id: clippy
-      - id: cargo-test
-      - id: cargo-fmt
-      - id: cargo-fix
-      - id: clippy-fix
-      - id: mutants
-      - id: audit
-      - id: tarpaulin
-
   - repo: https://github.com/psf/black-pre-commit-mirror
     rev: 26.5.1
     hooks:
