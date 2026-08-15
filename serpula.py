@@ -249,6 +249,8 @@ def load_env_file(path: Path) -> Generator[tuple[str, str], None, None]:
 def save_env_file(data: Iterable[tuple[str, str]], path: Path) -> None:
     with path.open(mode="wt") as f:
         f.write(serialize_env_content(data))
+    path.chmod(0o600)
+    path.parent.chmod(0o700)
 
 
 def ensure_secrets_scaffold(context: Context) -> None:
