@@ -3,3 +3,4 @@
 .direnv/
 .DS_Store
 mutants.out*
+build/
