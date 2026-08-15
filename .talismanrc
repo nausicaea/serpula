@@ -18,5 +18,5 @@ fileignoreconfig:
 - filename: proptest-regressions/launchd.txt
   checksum: dfc50d80101b6654a9b54a93e0372f4a3acdb962c3a5449a7c51ece70198cb17
 - filename: serpula.py
-  checksum: 11ec0f652cd1f7761aa7dc502ccf7ceec840ec60d3c309609e5c405ae91da6af
+  checksum: 5f93c99b2288ac9b30f72f2fac21f35394eb22cfa9783eee1ff6d98bab635919
 version: "1.0"

@@ -60,14 +60,14 @@ class Context:
 
 class Schedule(abc.ABC):
     @abc.abstractmethod
-    def build_xml(self, parent: ET.Element): ...
+    def build_xml(self, parent: ET.Element) -> None: ...
 
 
 class Interval(Schedule):
-    def __init__(self, seconds: int):
+    def __init__(self, seconds: int) -> None:
         self.seconds = seconds
 
-    def build_xml(self, parent: ET.Element):
+    def build_xml(self, parent: ET.Element) -> None:
         key = ET.SubElement(parent, "key")
         key.text = "StartInterval"
         value = ET.SubElement(parent, "integer")
@@ -75,12 +75,12 @@ class Interval(Schedule):
 
 
 class Calendar(Schedule):
-    def __init__(self, weekday: int | None, hour: int, minute: int):
+    def __init__(self, weekday: int | None, hour: int, minute: int) -> None:
         self.weekday = weekday
         self.hour = hour
         self.minute = minute
 
-    def build_xml(self, parent: ET.Element):
+    def build_xml(self, parent: ET.Element) -> None:
         key = ET.SubElement(parent, "key")
         key.text = "StartCalendarInterval"
         value = ET.SubElement(parent, "dict")
@@ -118,7 +118,7 @@ class Backup(Job):
         exclude_caches: bool,
         excludes: list[str],
         sources: list[Path],
-    ):
+    ) -> None:
         self._subcommand = "backup"
         self._schedule = schedule
         self._tags = tags
@@ -154,7 +154,7 @@ class Forget(Job):
         keep_weekly: int,
         keep_monthly: int,
         keep_yearly: int,
-    ):
+    ) -> None:
         self._subcommand = "forget"
         self._schedule = schedule
         self._keep_hourly = keep_hourly
@@ -182,7 +182,7 @@ class Forget(Job):
 
 
 class Check(Job):
-    def __init__(self, schedule: Schedule, read_data_subset: str):
+    def __init__(self, schedule: Schedule, read_data_subset: str) -> None:
         self._subcommand = "check"
         self._schedule = schedule
         self._read_data_subset = read_data_subset
@@ -240,12 +240,12 @@ def load_env_file(path: Path) -> Generator[tuple[str, str], None, None]:
         yield from parse_env_content(f)
 
 
-def save_env_file(data: Iterable[tuple[str, str]], path: Path):
+def save_env_file(data: Iterable[tuple[str, str]], path: Path) -> None:
     with path.open(mode="wt") as f:
         f.write(serialize_env_content(data))
 
 
-def ensure_secrets_scaffold(context: Context):
+def ensure_secrets_scaffold(context: Context) -> None:
     if context.secrets_file.exists():
         return
     variables = [
@@ -314,7 +314,7 @@ def notify_failure(
     priority: Priority,
     subcommand: str,
     message: str,
-):
+) -> None:
     title = f"serpula: restic {subcommand} failed on {context.host_name}"
     topic = get_ntfy_topic(context)
     client = http.client.HTTPSConnection(
@@ -347,7 +347,7 @@ def plist_label(context: Context, subcommand: str) -> str:
     return rdn[:max_name_len]
 
 
-def plist_document(context: Context, job: Job) -> str:
+def plist_document(context: Context, job: Job) -> bytes:
     plist = ET.Element("plist", attrib={"version": "1.0"})
     plist_dict = ET.SubElement(plist, "dict")
     label_key = ET.SubElement(plist_dict, "key")
@@ -386,14 +386,14 @@ def plist_document(context: Context, job: Job) -> str:
     low_prio_io_key.text = "LowPriorityIO"
     ET.SubElement(plist_dict, "true")
 
-    content = ET.tostring(plist, encoding="utf-8", xml_declaration=False)
-    header = """<?xml version="1.0" encoding="UTF-8"?>
+    content: bytes = ET.tostring(plist, encoding="utf-8", xml_declaration=False)
+    header = b"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 """
-    return header.encode("utf-8") + content
+    return header + content
 
 
-def cmd_proxy(context: Context, args: list[str]):
+def cmd_proxy(context: Context, args: list[str]) -> None:
     restic = shutil.which("restic")
     if restic is None:
         raise ValueError("Cannot find restic in the PATH")
@@ -412,7 +412,7 @@ def cmd_proxy(context: Context, args: list[str]):
         raise
 
 
-def cmd_install(context: Context, args: list[str]):
+def cmd_install(context: Context, args: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="serpula install",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -523,10 +523,10 @@ def cmd_install(context: Context, args: list[str]):
         path = destination / f"{label}.plist"
         xml_data = plist_document(context, job)
         with path.open(mode="wb") as f:
-            f.write(xml_data)  # type: ignore
+            f.write(xml_data)
 
 
-def main():
+def main() -> None:
     args = sys.argv
 
     if len(args) < 2:
