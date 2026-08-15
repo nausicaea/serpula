@@ -254,8 +254,8 @@ def ensure_secrets_scaffold(context: Context) -> None:
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
     ]
-    secrets = ((v, "") for v in variables)
-    save_env_file(secrets, context.secrets_file)
+    secrets = {v: "" for v in variables}
+    save_env_file(secrets.items(), context.secrets_file)
 
 
 def build_restic_env(context: Context) -> dict[str, str]:
