@@ -556,37 +556,31 @@ class TestContext(unittest.TestCase):
     def test_data_dir(self) -> None:
         self.assertEqual(
             self.ctx.data_dir,
-            Path("/home/Library/Application Support/net.nausicaea.serpula"),
+            Path(f"/home/Library/Application Support/{RDN}"),
         )
 
     def test_runtime_dir(self) -> None:
         self.assertEqual(
             self.ctx.runtime_dir,
-            Path("/home/Library/Application Support/net.nausicaea.serpula"),
+            Path(f"/home/Library/Application Support/{RDN}"),
         )
 
     def test_cache_dir(self) -> None:
-        self.assertEqual(
-            self.ctx.cache_dir, Path("/home/Library/Caches/net.nausicaea.serpula")
-        )
+        self.assertEqual(self.ctx.cache_dir, Path(f"/home/Library/Caches/{RDN}"))
 
     def test_log_dir(self) -> None:
-        self.assertEqual(
-            self.ctx.log_dir, Path("/home/Library/Caches/net.nausicaea.serpula/logs")
-        )
+        self.assertEqual(self.ctx.log_dir, Path(f"/home/Library/Caches/{RDN}/logs"))
 
     def test_lock_file(self) -> None:
         self.assertEqual(
             self.ctx.lock_file,
-            Path(
-                "/home/Library/Application Support/net.nausicaea.serpula/serpula.lock"
-            ),
+            Path(f"/home/Library/Application Support/{RDN}/serpula.lock"),
         )
 
     def test_secrets_file(self) -> None:
         self.assertEqual(
             self.ctx.secrets_file,
-            Path("/home/Library/Application Support/net.nausicaea.serpula/secrets/env"),
+            Path(f"/home/Library/Application Support/{RDN}/secrets/env"),
         )
 
 
