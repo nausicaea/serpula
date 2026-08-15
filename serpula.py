@@ -146,11 +146,11 @@ class Backup(Job):
     def args(self) -> list[str]:
         a = [self.subcommand()]
         if len(self._tags) > 0:
-            a.append(f"-t={','.join(self._tags)}")
+            a.append(f"--tag={','.join(self._tags)}")
         if self._exclude_caches:
             a.append("--exclude-caches")
         for exclude in self._excludes:
-            a.append(f"-e={exclude}")
+            a.append(f"--exclude={exclude}")
         for source in self._sources:
             a.append(str(source))
         return a
@@ -481,7 +481,7 @@ def cmd_install(context: Context, args: list[str]) -> None:
     parser.add_argument(
         "-t",
         "--tag",
-        nargs="*",
+        action="append",
         default=[context.host_name],
         help="Add tags for the new snapshot.",
     )
@@ -493,7 +493,7 @@ def cmd_install(context: Context, args: list[str]) -> None:
     parser.add_argument(
         "-e",
         "--exclude",
-        nargs="*",
+        action="append",
         default=[],
         help="Exclude a pattern.",
     )
@@ -711,9 +711,9 @@ class TestJob(unittest.TestCase):
             j.args(),
             [
                 "backup",
-                "-t=a,b,c",
-                "-e=A",
-                "-e=B",
+                "--tag=a,b,c",
+                "--exclude=A",
+                "--exclude=B",
                 "X",
                 "Y",
             ],
@@ -1114,9 +1114,9 @@ class TestPlistDocument(unittest.TestCase):
             [
                 str(self.ctx.script),
                 "backup",
-                "-t=tag1,tag2",
+                "--tag=tag1,tag2",
                 "--exclude-caches",
-                "-e=*.tmp",
+                "--exclude=*.tmp",
                 "/data",
             ],
         )
