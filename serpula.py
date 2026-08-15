@@ -22,6 +22,7 @@ from collections.abc import Generator, Iterable
 @dataclasses.dataclass(frozen=True)
 class Context:
     rdn: str
+    home: Path
     runtime_dir: Path
     data_dir: Path
     cache_dir: Path
@@ -39,6 +40,7 @@ class Context:
         cache_dir = home / "Library" / "Caches" / rdn
         return cls(
             rdn=rdn,
+            home=home,
             data_dir=data_dir,
             runtime_dir=data_dir,
             cache_dir=cache_dir,
@@ -422,14 +424,14 @@ def cmd_install(context: Context, args: list[str]) -> None:
         "-D",
         "--destination",
         type=Path,
-        default=Path("~/Library/LaunchAgents"),
+        default=Path(f"{context.home}/Library/LaunchAgents"),
         help="Define where the launchd plist files will be written to",
     )
     parser.add_argument(
         "-t",
         "--tag",
         nargs="*",
-        default=[],
+        default=[context.host_name],
         help="Add tags for the new snapshot.",
     )
     parser.add_argument(
