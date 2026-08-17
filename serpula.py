@@ -465,8 +465,6 @@ def cmd_proxy(context: Context, args: list[str]) -> None:
         title = f"serpula: restic {args[0]} failed on {context.host_name}"
         notify(context, Priority.DEFAULT, title, str(type(e)))
         raise
-    title = f"serpula: restic {args[0]} succeeded on {context.host_name}"
-    notify(context, Priority.LOW, title, "")
 
 
 def cmd_install(context: Context, args: list[str]) -> None:
