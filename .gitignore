@@ -5,3 +5,4 @@
 mutants.out*
 build/
 *.so
+__pycache__/
