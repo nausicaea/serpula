@@ -1,67 +1,58 @@
----
 fail_fast: true
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      # These will modify code
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: fix-byte-order-marker
-
-      # These will verify only
-      - id: check-yaml
-      - id: check-json
-      - id: check-xml
-      - id: check-added-large-files
-      - id: check-case-conflict
-      - id: check-executables-have-shebangs
-      - id: check-shebang-scripts-are-executable
-        exclude: ".*.rs"
-      - id: check-illegal-windows-names
-      - id: check-merge-conflict
-      - id: check-symlinks
-      - id: destroyed-symlinks
-      - id: check-vcs-permalinks
-      - id: forbid-submodules
-
-  - repo: https://github.com/psf/black-pre-commit-mirror
-    rev: 26.5.1
-    hooks:
-      - id: black
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.0
-    hooks:
-      - id: mypy
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.22
-    hooks:
-      - id: ruff-check
-
-  - repo: https://github.com/trufflesecurity/trufflehog
-    rev: v3.95.9
-    hooks:
-      - id: trufflehog
-
-  - repo: https://github.com/thoughtworks/talisman
-    rev: v1.37.0
-    hooks:
-      - id: talisman-push
-      - id: talisman-commit
-
-  - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.17.0
-    hooks:
-      - id: commitizen
-
-  - repo: local
-    hooks:
-      - id: serpula-tests
-        name: Run serpula unit tests
-        stages: [pre-push]
-        entry: python3 -m unittest serpula
-        language: system
-        pass_filenames: false
-        files: ^serpula\.py$
+- hooks:
+  - id: trailing-whitespace
+  - id: end-of-file-fixer
+  - id: fix-byte-order-marker
+  - id: check-yaml
+  - id: check-json
+  - id: check-xml
+  - id: check-added-large-files
+  - id: check-case-conflict
+  - id: check-executables-have-shebangs
+  - exclude: .*.rs
+    id: check-shebang-scripts-are-executable
+  - id: check-illegal-windows-names
+  - id: check-merge-conflict
+  - id: check-symlinks
+  - id: destroyed-symlinks
+  - id: check-vcs-permalinks
+  - id: forbid-submodules
+  repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+- hooks:
+  - id: black
+  repo: https://github.com/psf/black-pre-commit-mirror
+  rev: 26.5.1
+- hooks:
+  - id: mypy
+  repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v2.3.0
+- hooks:
+  - id: ruff-check
+  repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.22
+- hooks:
+  - id: trufflehog
+  repo: https://github.com/trufflesecurity/trufflehog
+  rev: v3.95.9
+- hooks:
+  - id: talisman-push
+  - id: talisman-commit
+  repo: https://github.com/thoughtworks/talisman
+  rev: v1.37.0
+- hooks:
+  - id: commitizen
+  - id: commitizen-branch
+  repo: https://github.com/commitizen-tools/commitizen
+  rev: v4.17.0
+- hooks:
+  - entry: python3 -m unittest serpula
+    files: ^serpula\.py$
+    id: serpula-tests
+    language: system
+    name: Run serpula unit tests
+    pass_filenames: false
+    stages:
+    - pre-push
+  repo: local
